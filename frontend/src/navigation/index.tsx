@@ -6,7 +6,7 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { TouchableOpacity, View, Text } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
-import { SPACING, TYPOGRAPHY } from '../constants/theme';
+import { BORDER_RADIUS, SPACING, TYPOGRAPHY } from '../constants/theme';
 
 // Import screens (we'll create these later)
 import AuthScreen from '../screens/AuthScreen';
@@ -133,10 +133,11 @@ const CustomDrawerContent = (props: any) => {
             }}
             onPress={() => {
               if (item.screen === 'Logout') {
-                // Handle logout
                 console.log('Logout pressed');
               } else {
-                props.navigation.navigate(item.screen);
+                props.navigation.navigate('AppStack', {
+                  screen: item.screen,
+                });
                 props.navigation.closeDrawer();
               }
             }}
