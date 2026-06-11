@@ -1,0 +1,45 @@
+{
+  "transactionId": "TXN-004",
+  "signals": [
+    {
+      "type": "DEVICE",
+      "name": "New Device",
+      "status": "SUSPICIOUS",
+      "description": "Transaction from unrecognized device (iPhone 14, Delhi)",
+      "timestamp": "2026-06-12T01:03:00Z",
+      "priority": "HIGH"
+    },
+    {
+      "type": "TIME",
+      "name": "Night Owl",
+      "status": "SUSPICIOUS",
+      "description": "Transaction at 01:04 IST - high-risk time window",
+      "timestamp": "2026-06-12T01:04:00Z",
+      "priority": "MEDIUM"
+    },
+    {
+      "type": "OTP",
+      "name": "Fast OTP",
+      "status": "SUSPICIOUS",
+      "description": "OTP entered unusually fast (<5 seconds) - possible coercion",
+      "timestamp": "2026-06-12T01:04:05Z",
+      "priority": "HIGH"
+    },
+    {
+      "type": "AMOUNT",
+      "name": "Amount Spike",
+      "status": "SUSPICIOUS",
+      "description": "₹50,000 = 28x user's average transfer amount",
+      "timestamp": "2026-06-12T01:04:10Z",
+      "priority": "HIGH"
+    }
+  ],
+  "timeline": [
+    { "time": "01:02", "event": "Login", "status": "NORMAL" },
+    { "time": "01:03", "event": "New Device", "status": "SUSPICIOUS" },
+    { "time": "01:04", "event": "OTP Entered", "status": "SUSPICIOUS" },
+    { "time": "01:04", "event": "Transfer Initiated", "status": "SUSPICIOUS" },
+    { "time": "01:04", "event": "Risk Elevated", "status": "CRITICAL" },
+    { "time": "01:04", "event": "Transaction Blocked", "status": "BLOCKED" }
+  ]
+}

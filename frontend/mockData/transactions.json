@@ -1,0 +1,41 @@
+[
+  {
+    "transactionId": "TXN-001",
+    "userId": "USR-001",
+    "accountId": "ACC-001",
+    "amount": -2450,
+    "merchantName": "Grocery Store",
+    "merchantCategory": "Shopping",
+    "channel": "Card",
+    "transactionTime": "2026-06-12T09:15:22Z",
+    "status": "SUCCESS",
+    "riskScore": 12,
+    "decision": "ALLOW"
+  },
+  {
+    "transactionId": "TXN-002",
+    "userId": "USR-001",
+    "accountId": "ACC-001",
+    "amount": 50000,
+    "merchantName": "Salary Credit",
+    "merchantCategory": "Income",
+    "channel": "NEFT",
+    "transactionTime": "2026-06-11T08:30:15Z",
+    "status": "SUCCESS",
+    "riskScore": 5,
+    "decision": "ALLOW"
+  },
+  {
+    "transactionId": "TXN-003",
+    "userId": "USR-001",
+    "accountId": "ACC-001",
+    "amount": -1200,
+    "merchantName": "Electricity Board",
+    "merchantCategory": "Utilities",
+    "channel": "IMPS",
+    "transactionTime": "2026-06-08T14:22:45Z",
+    "status": "SUCCESS",
+    "riskScore": 8,
+    "decision": "ALLOW"
+  }
+]

@@ -1,0 +1,78 @@
+[
+  {
+    "auditId": "AUD-501",
+    "timestamp": "2026-06-12T01:10:22Z",
+    "userId": "USR-001",
+    "eventType": "BLOCK_TRANSACTION",
+    "eventDetails": {
+      "transactionId": "TXN-004",
+      "amount": 50000,
+      "merchant": "XYZ Ltd",
+      "reason": "New device + night owl + fast OTP"
+    },
+    "previousHash": "ABC123DEF456",
+    "currentHash": "XYZ789GHI012",
+    "signature": "SIG_AUD_001",
+    "riskScore": 92,
+    "decision": "BLOCK",
+    "integrityStatus": "VERIFIED",
+    "replicaVerification": {
+      "master": "VERIFIED",
+      "replicaA": "VERIFIED",
+      "replicaB": "VERIFIED",
+      "replicaC": "VERIFIED"
+    }
+  },
+  {
+    "auditId": "AUD-502",
+    "timestamp": "2026-06-12T02:15:33Z",
+    "userId": "USR-001",
+    "eventType": "ALLOW_LOGIN",
+    "eventDetails": {
+      "ipAddress": "192.168.1.100",
+      "location": "Delhi, India",
+      "device": "iPhone 14 Pro"
+    },
+    "previousHash": "XYZ789GHI012",
+    "currentHash": "JKL345MNO678",
+    "signature": "SIG_AUD_002",
+    "riskScore": 12,
+    "decision": "ALLOW",
+    "integrityStatus": "VERIFIED",
+    "replicaVerification": {
+      "master": "VERIFIED",
+      "replicaA": "VERIFIED",
+      "replicaB": "VERIFIED",
+      "replicaC": "VERIFIED"
+    }
+  },
+  {
+    "auditId": "AUD-503",
+    "timestamp": "2026-06-11T23:45:11Z",
+    "userId": "USR-001",
+    "eventType": "BLOCK_TRANSACTION",
+    "eventDetails": {
+      "transactionId": "TXN-005",
+      "amount": 75000,
+      "merchant": "FakeShop Online",
+      "reason": "Phishing attempt detected"
+    },
+    "previousHash": "JKL345MNO678",
+    "currentHash": "PQR901STU234",
+    "signature": "SIG_AUD_003",
+    "riskScore": 98,
+    "decision": "BLOCK",
+    "integrityStatus": "TAMPER_DETECTED",
+    "replicaVerification": {
+      "master": "MODIFIED",
+      "replicaA": "VERIFIED",
+      "replicaB": "VERIFIED",
+      "replicaC": "VERIFIED",
+      "recoveryEvent": {
+        "timestamp": "2026-06-12T00:00:00Z",
+        "restoredFrom": "Replica A",
+        "alertGenerated": true
+      }
+    }
+  }
+]

@@ -15,7 +15,7 @@ const DashboardScreen = () => {
     { id: '1', title: 'Transfer Money', icon: 'send', color: COLORS.primary },
     { id: '2', title: 'Check Balance', icon: 'pie-chart', color: COLORS.success },
     { id: '3', title: 'View Statements', icon: 'file-text', color: COLORS.warning },
-    { id: '4', title: 'Security Check', icon: 'shield', color: COLORS.danger },
+    { id: '4', title: 'Security Check', icon: 'shield', color: COLORS.s_danger },
   ];
 
   const recentTransactions = [
@@ -29,11 +29,11 @@ const DashboardScreen = () => {
       <View style={styles.transactionContent}>
         <View>
           <Text style={styles.transactionDescription}>{item.description}</Text>
-          <Text style={styles.transactionCategory}>{item.category}</Text>
+          <Text style={styles.transactionCategory}>{item.category}</Text>₹
         </View>
         <Text style={[
           styles.transactionAmount,
-          { color: item.amount > 0 ? COLORS.success : COLORS.danger }
+          { color: item.amount > 0 ? COLORS.success : COLORS.s_danger }
         ]}>
           {item.amount > 0 ? '+' : '-'}₹{Math.abs(item.amount).toLocaleString()}
         </Text>

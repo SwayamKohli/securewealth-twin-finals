@@ -1,0 +1,22 @@
+[
+  {
+    "recommendationId": "REC-001",
+    "userId": "USR-001",
+    "recommendationType": "Emergency Fund",
+    "recommendationText": "Build an emergency fund covering 6 months of expenses",
+    "confidenceScore": 94,
+    "expectedBenefit": "Avoid debt in emergencies",
+    "reason": "Your liquid savings cover only 1.2 months of expenses",
+    "generatedAt": "2026-06-12T10:00:00Z"
+  },
+  {
+    "recommendationId": "REC-002",
+    "userId": "USR-001",
+    "recommendationType": "FD Planning",
+    "recommendationText": "Consider reinvesting your maturing FD for optimal returns",
+    "confidenceScore": 87,
+    "expectedBenefit": "Earn 7.5% annual interest",
+    "reason": "Your FD matures in 90 days - plan reinvestment now",
+    "generatedAt": "2026-06-12T10:00:00Z"
+  }
+]

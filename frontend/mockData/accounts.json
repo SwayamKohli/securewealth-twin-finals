@@ -1,0 +1,22 @@
+[
+  {
+    "accountId": "ACC-001",
+    "userId": "USR-001",
+    "bankName": "Punjab & Sind Bank",
+    "accountType": "Savings",
+    "accountNumberMasked": "****1234",
+    "balance": 48750.00,
+    "currency": "INR",
+    "createdAt": "2024-01-15T09:00:00Z"
+  },
+  {
+    "accountId": "ACC-002",
+    "userId": "USR-001",
+    "bankName": "State Bank of India",
+    "accountType": "Current",
+    "accountNumberMasked": "****5678",
+    "balance": 125000.00,
+    "currency": "INR",
+    "createdAt": "2024-03-20T11:30:00Z"
+  }
+]
