@@ -1,45 +1,62 @@
 {
-  "transactionId": "TXN-004",
-  "signals": [
-    {
-      "type": "DEVICE",
-      "name": "New Device",
-      "status": "SUSPICIOUS",
-      "description": "Transaction from unrecognized device (iPhone 14, Delhi)",
-      "timestamp": "2026-06-12T01:03:00Z",
-      "priority": "HIGH"
+  "signalDefinitions": {
+    "NEW_DEVICE": {
+      "friendlyName": "Sending from a new device",
+      "explanation": "This payment is coming from a device we haven't seen on your account before. If this is your new phone, you can confirm it below.",
+      "icon": "smartphone",
+      "severity": "HIGH"
     },
-    {
-      "type": "TIME",
-      "name": "Night Owl",
-      "status": "SUSPICIOUS",
-      "description": "Transaction at 01:04 IST - high-risk time window",
-      "timestamp": "2026-06-12T01:04:00Z",
-      "priority": "MEDIUM"
+    "NIGHT_OWL": {
+      "friendlyName": "Late-night transaction",
+      "explanation": "This payment is happening very late at night. Most people don't make large transfers at this time, so we check these more carefully.",
+      "icon": "moon",
+      "severity": "MEDIUM"
     },
-    {
-      "type": "OTP",
-      "name": "Fast OTP",
-      "status": "SUSPICIOUS",
-      "description": "OTP entered unusually fast (<5 seconds) - possible coercion",
-      "timestamp": "2026-06-12T01:04:05Z",
-      "priority": "HIGH"
+    "FAST_OTP": {
+      "friendlyName": "OTP entered very quickly",
+      "explanation": "The one-time password was entered almost instantly. Banks never ask you to share or rush an OTP — if someone is guiding you on a call, please hang up and contact us.",
+      "icon": "zap",
+      "severity": "HIGH"
     },
-    {
-      "type": "AMOUNT",
-      "name": "Amount Spike",
-      "status": "SUSPICIOUS",
-      "description": "₹50,000 = 28x user's average transfer amount",
-      "timestamp": "2026-06-12T01:04:10Z",
-      "priority": "HIGH"
+    "AMOUNT_SPIKE": {
+      "friendlyName": "Larger amount than usual",
+      "explanation": "This amount is significantly higher than what you usually send. This is just a precaution — your payment can still go through.",
+      "icon": "trending-up",
+      "severity": "MEDIUM"
+    },
+    "ROUND_NUMBER": {
+      "friendlyName": "Unusually round amount",
+      "explanation": "Fraudulent transfers are often requested in exact round numbers like ₹40,000 or ₹50,000. This pattern, combined with other signals, raised our concern.",
+      "icon": "hash",
+      "severity": "MEDIUM"
+    },
+    "NEW_RECIPIENT": {
+      "friendlyName": "Sending to someone new",
+      "explanation": "You haven't sent money to this person or account before. We just want to double-check it's really you before continuing.",
+      "icon": "user-plus",
+      "severity": "MEDIUM"
+    },
+    "TRANSACTION_BURST": {
+      "friendlyName": "Several payments in a short time",
+      "explanation": "Multiple transactions were made back-to-back in a short window, which can sometimes indicate unauthorized access.",
+      "icon": "fast-forward",
+      "severity": "MEDIUM"
     }
-  ],
-  "timeline": [
-    { "time": "01:02", "event": "Login", "status": "NORMAL" },
-    { "time": "01:03", "event": "New Device", "status": "SUSPICIOUS" },
-    { "time": "01:04", "event": "OTP Entered", "status": "SUSPICIOUS" },
-    { "time": "01:04", "event": "Transfer Initiated", "status": "SUSPICIOUS" },
-    { "time": "01:04", "event": "Risk Elevated", "status": "CRITICAL" },
-    { "time": "01:04", "event": "Transaction Blocked", "status": "BLOCKED" }
-  ]
+  },
+
+  "_comment_scenarioExample": "Reference scenario matching the blueprint's Flow 2 (Fraud Attempt) demo — used for documentation/testing, not directly consumed by screens.",
+  "scenarioExample": {
+    "transactionId": "TXN-004",
+    "decision": "BLOCK",
+    "riskScore": 92,
+    "signalIds": ["NEW_DEVICE", "NIGHT_OWL", "FAST_OTP", "ROUND_NUMBER"],
+    "timeline": [
+      { "time": "01:02", "event": "Logged in", "status": "NORMAL" },
+      { "time": "01:03", "event": "New device noticed", "status": "SUSPICIOUS" },
+      { "time": "01:04", "event": "OTP entered", "status": "SUSPICIOUS" },
+      { "time": "01:04", "event": "Payment requested", "status": "SUSPICIOUS" },
+      { "time": "01:04", "event": "Risk level raised", "status": "CRITICAL" },
+      { "time": "01:04", "event": "Payment stopped", "status": "BLOCKED" }
+    ]
+  }
 }

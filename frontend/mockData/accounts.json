@@ -4,9 +4,12 @@
     "userId": "USR-001",
     "bankName": "Punjab & Sind Bank",
     "accountType": "Savings",
+    "accountTypeLabel": "Savings Account (बचत खाता)",
     "accountNumberMasked": "****1234",
+    "ifsc": "PSIB0000001",
     "balance": 48750.00,
     "currency": "INR",
+    "isPrimary": true,
     "createdAt": "2024-01-15T09:00:00Z"
   },
   {
@@ -14,9 +17,25 @@
     "userId": "USR-001",
     "bankName": "State Bank of India",
     "accountType": "Current",
+    "accountTypeLabel": "Current Account (चालू खाता)",
     "accountNumberMasked": "****5678",
+    "ifsc": "SBIN0001234",
     "balance": 125000.00,
     "currency": "INR",
+    "isPrimary": false,
     "createdAt": "2024-03-20T11:30:00Z"
+  },
+  {
+    "accountId": "ACC-003",
+    "userId": "USR-001",
+    "bankName": "Punjab & Sind Bank",
+    "accountType": "Salary",
+    "accountTypeLabel": "Salary Account (वेतन खाता)",
+    "accountNumberMasked": "****9012",
+    "ifsc": "PSIB0000002",
+    "balance": 75000.00,
+    "currency": "INR",
+    "isPrimary": false,
+    "createdAt": "2023-06-01T10:00:00Z"
   }
 ]

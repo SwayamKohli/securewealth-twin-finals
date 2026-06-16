@@ -1,0 +1,47 @@
+{
+  "signalDefinitions": {
+    "URGENCY": {
+      "friendlyName": "Creates urgency",
+      "explanation": "The message pressures you to act fast — phrases like \"act now\" or \"within 24 hours\" are designed to stop you from thinking it through.",
+      "icon": "clock"
+    },
+    "THREAT": {
+      "friendlyName": "Threatens to block or suspend your account",
+      "explanation": "Real banks don't threaten to freeze your account over a text or email. This is a common scare tactic.",
+      "icon": "alert-octagon"
+    },
+    "SENSITIVE_REQUEST": {
+      "friendlyName": "Asks for sensitive information",
+      "explanation": "Banks never ask you to share your OTP, PIN, password, or full card number through a message — not even \"to verify your identity\".",
+      "icon": "lock"
+    },
+    "SUSPICIOUS_LINK": {
+      "friendlyName": "Contains a suspicious link",
+      "explanation": "The link uses an unusual address or a link-shortener that hides where it really goes. Genuine bank links use the bank's official domain.",
+      "icon": "link"
+    },
+    "IMPERSONATION": {
+      "friendlyName": "Pretends to be from your bank",
+      "explanation": "The message mentions your bank by name, but combined with the other warning signs here, it's likely impersonating us rather than actually being from us.",
+      "icon": "shield-off"
+    }
+  },
+
+  "exampleMessages": [
+    {
+      "id": "EX-SAFE",
+      "label": "A normal OTP message",
+      "text": "Your OTP for login is 482910. Valid for 10 minutes. Do not share this OTP with anyone, including bank staff. - PSB"
+    },
+    {
+      "id": "EX-SUSPICIOUS",
+      "label": "A \"verify your account\" message",
+      "text": "Dear Customer, your account requires re-verification. Please update your KYC details to continue using our services without interruption."
+    },
+    {
+      "id": "EX-PHISHING",
+      "label": "An urgent \"account suspended\" message",
+      "text": "URGENT: Your bank account will be suspended in 24 hours! Click here immediately to verify your account and avoid permanent block: http://psb-secure-verify.tk/login"
+    }
+  ]
+}

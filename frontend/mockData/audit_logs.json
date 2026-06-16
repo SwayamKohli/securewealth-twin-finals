@@ -1,18 +1,18 @@
 [
   {
     "auditId": "AUD-501",
-    "timestamp": "2026-06-12T01:10:22Z",
+    "timestamp": "2026-06-14T01:10:22Z",
     "userId": "USR-001",
     "eventType": "BLOCK_TRANSACTION",
     "eventDetails": {
       "transactionId": "TXN-004",
       "amount": 50000,
-      "merchant": "XYZ Ltd",
-      "reason": "New device + night owl + fast OTP"
+      "recipient": "Unknown Recipient",
+      "reason": "New device + late-night transaction + OTP entered very quickly + round amount"
     },
-    "previousHash": "ABC123DEF456",
-    "currentHash": "XYZ789GHI012",
-    "signature": "SIG_AUD_001",
+    "previousHash": "ABC123DEF456789",
+    "currentHash": "XYZ789GHI012345",
+    "signature": "SIG_ED25519_AUD_501",
     "riskScore": 92,
     "decision": "BLOCK",
     "integrityStatus": "VERIFIED",
@@ -25,18 +25,18 @@
   },
   {
     "auditId": "AUD-502",
-    "timestamp": "2026-06-12T02:15:33Z",
+    "timestamp": "2026-06-14T09:15:00Z",
     "userId": "USR-001",
     "eventType": "ALLOW_LOGIN",
     "eventDetails": {
-      "ipAddress": "192.168.1.100",
+      "device": "iPhone 14 Pro",
       "location": "Delhi, India",
-      "device": "iPhone 14 Pro"
+      "method": "MPIN"
     },
-    "previousHash": "XYZ789GHI012",
-    "currentHash": "JKL345MNO678",
-    "signature": "SIG_AUD_002",
-    "riskScore": 12,
+    "previousHash": "XYZ789GHI012345",
+    "currentHash": "JKL345MNO678901",
+    "signature": "SIG_ED25519_AUD_502",
+    "riskScore": 8,
     "decision": "ALLOW",
     "integrityStatus": "VERIFIED",
     "replicaVerification": {
@@ -48,20 +48,21 @@
   },
   {
     "auditId": "AUD-503",
-    "timestamp": "2026-06-11T23:45:11Z",
+    "timestamp": "2026-06-13T23:45:11Z",
     "userId": "USR-001",
-    "eventType": "BLOCK_TRANSACTION",
+    "eventType": "TAMPER_ATTEMPT",
     "eventDetails": {
-      "transactionId": "TXN-005",
-      "amount": 75000,
-      "merchant": "FakeShop Online",
-      "reason": "Phishing attempt detected"
+      "affectedRecord": "AUD-501",
+      "originalDecision": "BLOCK",
+      "attemptedChange": "ALLOW",
+      "detectedBy": "Replica consensus mismatch",
+      "restoredFrom": "Replica A"
     },
-    "previousHash": "JKL345MNO678",
-    "currentHash": "PQR901STU234",
-    "signature": "SIG_AUD_003",
-    "riskScore": 98,
-    "decision": "BLOCK",
+    "previousHash": "JKL345MNO678901",
+    "currentHash": "PQR901STU234567",
+    "signature": "SIG_ED25519_AUD_503",
+    "riskScore": 100,
+    "decision": "TAMPER_DETECTED",
     "integrityStatus": "TAMPER_DETECTED",
     "replicaVerification": {
       "master": "MODIFIED",
@@ -69,10 +70,58 @@
       "replicaB": "VERIFIED",
       "replicaC": "VERIFIED",
       "recoveryEvent": {
-        "timestamp": "2026-06-12T00:00:00Z",
+        "timestamp": "2026-06-13T23:45:13Z",
         "restoredFrom": "Replica A",
         "alertGenerated": true
       }
+    }
+  },
+  {
+    "auditId": "AUD-504",
+    "timestamp": "2026-06-13T14:22:45Z",
+    "userId": "USR-001",
+    "eventType": "ALLOW_TRANSACTION",
+    "eventDetails": {
+      "transactionId": "TXN-003",
+      "amount": 1200,
+      "recipient": "Delhi Electricity Board",
+      "channel": "IMPS"
+    },
+    "previousHash": "PQR901STU234567",
+    "currentHash": "VWX567YZA890123",
+    "signature": "SIG_ED25519_AUD_504",
+    "riskScore": 8,
+    "decision": "ALLOW",
+    "integrityStatus": "VERIFIED",
+    "replicaVerification": {
+      "master": "VERIFIED",
+      "replicaA": "VERIFIED",
+      "replicaB": "VERIFIED",
+      "replicaC": "VERIFIED"
+    }
+  },
+  {
+    "auditId": "AUD-505",
+    "timestamp": "2026-06-13T09:30:15Z",
+    "userId": "USR-001",
+    "eventType": "ALLOW_TRANSACTION",
+    "eventDetails": {
+      "transactionId": "TXN-002",
+      "amount": 75000,
+      "recipient": "Salary Credit — PSB HR",
+      "channel": "NEFT"
+    },
+    "previousHash": "VWX567YZA890123",
+    "currentHash": "BCD234EFG567890",
+    "signature": "SIG_ED25519_AUD_505",
+    "riskScore": 5,
+    "decision": "ALLOW",
+    "integrityStatus": "VERIFIED",
+    "replicaVerification": {
+      "master": "VERIFIED",
+      "replicaA": "VERIFIED",
+      "replicaB": "VERIFIED",
+      "replicaC": "VERIFIED"
     }
   }
 ]

@@ -1,0 +1,13 @@
+[
+  {
+    "loanId": "LOAN-001",
+    "userId": "USR-001",
+    "loanType": "Car",
+    "originalAmount": 300000,
+    "outstandingAmount": 185000,
+    "emi": 8500,
+    "interestRate": 9.2,
+    "remainingTenureMonths": 22,
+    "institution": "Punjab & Sind Bank"
+  }
+]

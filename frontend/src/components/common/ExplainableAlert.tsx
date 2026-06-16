@@ -1,10 +1,24 @@
 // src/components/common/ExplainableAlert.tsx
+// SecureWealth Twin -- Explainable Alert
+//
+// Changes from original:
+//  - COLORS.s_danger renamed to COLORS.danger throughout (s_danger is the
+//    internal alias for PSB.danger, same color -- using the more readable name).
+//  - COLORS.warning renamed to COLORS.caution to match Batch 1 color system
+//    (COLORS.warning still exists but caution is the semantic name used
+//    consistently across all Batch 2-5 screens).
+//  - Added `marginVertical` to container style from the original but removed
+//    it as a hard-coded value -- callers control vertical spacing via `style`
+//    prop instead, matching how every other component in this codebase works.
+//  - Alert now shows the full explanation by default when `showExplanation`
+//    is true (preserved from original).
+
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import Card from './Card';
 import { COLORS } from '../../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS } from '../../constants/theme';
+import Card from './Card';
 
 type AlertType = 'info' | 'success' | 'warning' | 'danger';
 
@@ -15,7 +29,35 @@ interface ExplainableAlertProps {
   showExplanation?: boolean;
   onAction?: () => void;
   actionText?: string;
+  style?: object;
 }
+
+// Map AlertType -> semantic COLORS keys (Batch 1 color system)
+const TYPE_CONFIG: Record<AlertType, { color: string; bg: string; icon: string }> = {
+  info: {
+    color: COLORS.info,
+    bg: COLORS.info + '12',
+    icon: 'info',
+  },
+  success: {
+    color: COLORS.success,
+    bg: COLORS.success + '12',
+    icon: 'check-circle',
+  },
+  warning: {
+    // 'warning' AlertType -> COLORS.caution (amber) not COLORS.warning
+    // (they are the same value, but caution is the canonical name in this project)
+    color: COLORS.caution,
+    bg: COLORS.cautionLight,
+    icon: 'alert-triangle',
+  },
+  danger: {
+    // Original used COLORS.s_danger -- COLORS.danger is the same value, cleaner name
+    color: COLORS.danger,
+    bg: COLORS.dangerLight,
+    icon: 'alert-octagon',
+  },
+};
 
 const ExplainableAlert: React.FC<ExplainableAlertProps> = ({
   type,
@@ -24,56 +66,42 @@ const ExplainableAlert: React.FC<ExplainableAlertProps> = ({
   showExplanation = false,
   onAction,
   actionText,
+  style,
 }) => {
   const [expanded, setExpanded] = useState(showExplanation);
-
-  const getColor = () => {
-    switch (type) {
-      case 'info': return COLORS.info;
-      case 'success': return COLORS.success;
-      case 'warning': return COLORS.warning;
-      case 'danger': return COLORS.s_danger;
-      default: return COLORS.text;
-    }
-  };
-
-  const getIcon = () => {
-    switch (type) {
-      case 'info': return 'info';
-      case 'success': return 'check-circle';
-      case 'warning': return 'alert-triangle';
-      case 'danger': return 'alert-octagon';
-      default: return 'info';
-    }
-  };
-
-  const getBackgroundColor = () => {
-    switch (type) {
-      case 'info': return COLORS.info + '10';
-      case 'success': return COLORS.success + '10';
-      case 'warning': return COLORS.warning + '10';
-      case 'danger': return COLORS.s_danger + '10';
-      default: return COLORS.text + '10';
-    }
-  };
+  const cfg = TYPE_CONFIG[type];
 
   return (
-    <Card style={[styles.container, { borderLeftColor: getColor(), backgroundColor: getBackgroundColor() }]}>
-      <View style={styles.header}>
-        <View style={styles.iconContainer}>
-          <Feather name={getIcon() as any} size={20} color={getColor()} />
-        </View>
-        <Text style={[styles.title, { color: getColor() }]}>{title}</Text>
-        <TouchableOpacity onPress={() => setExpanded(!expanded)} style={styles.expandButton}>
-          <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={20} color={getColor()} />
-        </TouchableOpacity>
-      </View>
-      
+    <Card
+      variant="outlined"
+      style={[
+        styles.container,
+        { borderLeftColor: cfg.color, backgroundColor: cfg.bg },
+        style,
+      ]}
+      padding={0}
+    >
+      {/* Always-visible header row */}
+      <TouchableOpacity
+        style={styles.header}
+        onPress={() => setExpanded(!expanded)}
+        activeOpacity={0.7}
+      >
+        <Feather name={cfg.icon as any} size={18} color={cfg.color} />
+        <Text style={[styles.title, { color: cfg.color }]}>{title}</Text>
+        <Feather
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={18}
+          color={cfg.color}
+        />
+      </TouchableOpacity>
+
+      {/* Expandable explanation */}
       {expanded && (
-        <View style={styles.explanationContainer}>
+        <View style={styles.body}>
           <Text style={styles.explanation}>{explanation}</Text>
           {actionText && onAction && (
-            <TouchableOpacity style={styles.actionButton} onPress={onAction}>
+            <TouchableOpacity style={styles.actionBtn} onPress={onAction} activeOpacity={0.8}>
               <Text style={styles.actionText}>{actionText}</Text>
             </TouchableOpacity>
           )}
@@ -86,40 +114,36 @@ const ExplainableAlert: React.FC<ExplainableAlertProps> = ({
 const styles = StyleSheet.create({
   container: {
     borderLeftWidth: 4,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
-    marginVertical: SPACING.sm,
+    // No hard-coded marginVertical -- callers use style prop
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  iconContainer: {
-    marginRight: SPACING.sm,
+    gap: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
   },
   title: {
-    ...TYPOGRAPHY.bodySm,
+    ...TYPOGRAPHY.bodySmMedium,
     fontWeight: '600',
     flex: 1,
   },
-  expandButton: {
-    padding: SPACING.xs,
-  },
-  explanationContainer: {
-    marginTop: SPACING.sm,
+  body: {
+    paddingHorizontal: SPACING.md,
+    paddingBottom: SPACING.md,
   },
   explanation: {
     ...TYPOGRAPHY.bodySm,
     color: COLORS.textSecondary,
     lineHeight: 20,
   },
-  actionButton: {
+  actionBtn: {
     marginTop: SPACING.sm,
     alignSelf: 'flex-start',
     backgroundColor: COLORS.primary,
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
-    borderRadius: BORDER_RADIUS.sm,
+    borderRadius: BORDER_RADIUS.md,
   },
   actionText: {
     ...TYPOGRAPHY.caption,

@@ -4,38 +4,90 @@
     "userId": "USR-001",
     "accountId": "ACC-001",
     "amount": -2450,
-    "merchantName": "Grocery Store",
+    "merchantName": "Big Bazaar",
     "merchantCategory": "Shopping",
     "channel": "Card",
-    "transactionTime": "2026-06-12T09:15:22Z",
+    "transactionTime": "2026-06-14T09:15:22Z",
     "status": "SUCCESS",
     "riskScore": 12,
-    "decision": "ALLOW"
+    "decision": "ALLOW",
+    "riskSignals": []
   },
   {
     "transactionId": "TXN-002",
     "userId": "USR-001",
     "accountId": "ACC-001",
-    "amount": 50000,
-    "merchantName": "Salary Credit",
+    "amount": 75000,
+    "merchantName": "Salary Credit — PSB HR",
     "merchantCategory": "Income",
     "channel": "NEFT",
-    "transactionTime": "2026-06-11T08:30:15Z",
+    "transactionTime": "2026-06-13T08:30:15Z",
     "status": "SUCCESS",
     "riskScore": 5,
-    "decision": "ALLOW"
+    "decision": "ALLOW",
+    "riskSignals": []
   },
   {
     "transactionId": "TXN-003",
     "userId": "USR-001",
     "accountId": "ACC-001",
     "amount": -1200,
-    "merchantName": "Electricity Board",
+    "merchantName": "Delhi Electricity Board",
     "merchantCategory": "Utilities",
     "channel": "IMPS",
-    "transactionTime": "2026-06-08T14:22:45Z",
+    "transactionTime": "2026-06-12T14:22:45Z",
     "status": "SUCCESS",
     "riskScore": 8,
-    "decision": "ALLOW"
+    "decision": "ALLOW",
+    "riskSignals": []
+  },
+  {
+    "transactionId": "TXN-004",
+    "userId": "USR-001",
+    "accountId": "ACC-001",
+    "amount": -50000,
+    "merchantName": "Unknown Recipient",
+    "merchantCategory": "Transfer",
+    "channel": "IMPS",
+    "transactionTime": "2026-06-11T01:10:22Z",
+    "status": "BLOCKED",
+    "riskScore": 92,
+    "decision": "BLOCK",
+    "riskSignals": [
+      "Late night transaction (1:10 AM)",
+      "Sending to someone new",
+      "OTP entered unusually fast",
+      "Round amount — common in fraud"
+    ]
+  },
+  {
+    "transactionId": "TXN-005",
+    "userId": "USR-001",
+    "accountId": "ACC-002",
+    "amount": -3500,
+    "merchantName": "Swiggy",
+    "merchantCategory": "Food & Dining",
+    "channel": "UPI",
+    "transactionTime": "2026-06-10T20:45:10Z",
+    "status": "SUCCESS",
+    "riskScore": 15,
+    "decision": "ALLOW",
+    "riskSignals": []
+  },
+  {
+    "transactionId": "TXN-006",
+    "userId": "USR-001",
+    "accountId": "ACC-001",
+    "amount": -8000,
+    "merchantName": "Amazon India",
+    "merchantCategory": "Shopping",
+    "channel": "Card",
+    "transactionTime": "2026-06-09T16:30:00Z",
+    "status": "SUCCESS",
+    "riskScore": 28,
+    "decision": "WARN",
+    "riskSignals": [
+      "Amount higher than usual for this merchant"
+    ]
   }
 ]

@@ -1,422 +1,952 @@
 // src/screens/DashboardScreen.tsx
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList, RefreshControl } from 'react-native';
+// SecureWealth Twin — Home Dashboard
+//
+// Layout (top → bottom, inside ScrollView):
+//  1. Green hero section: greeting + account carousel + dots
+//  2. Quick actions row (4 items, single row)
+//  3. Protection Status card  ← replaces confusing "LOW security"
+//  4. Recent Transactions     ← flat list, scrollDisabled, inside ScrollView
+//  5. Smart Wealth Tip card   ← single insight from wealth engine
+//
+// Design decisions:
+//  - Hero bg extends to top (no white gap under the navigator green header)
+//  - Account carousel uses ScrollView + manual dot tracking (no FlatList nesting)
+//  - All risk/decision language is human-friendly per the plan
+//  - GlossaryPopup on every banking term (Net Worth, NEFT, IMPS, etc.)
+//  - Transactions capped at 5 — "View All" goes to full history (future screen)
+
+import React, { useState, useRef, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  RefreshControl,
+  Dimensions,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
+  StatusBar,
+} from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { COLORS } from '../constants/colors';
-import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
-import Card from '../components/common/Card';
-import RiskBadge from '../components/common/RiskBadge';
-import ExplainableAlert from '../components/common/ExplainableAlert';
+import {
+  SPACING,
+  TYPOGRAPHY,
+  BORDER_RADIUS,
+  SHADOWS,
+  CARD,
+  ANIMATION,
+} from '../constants/theme';
+import GlossaryPopup from '../components/common/GlossaryPopup';
 
-const DashboardScreen = () => {
-  const [refreshing, setRefreshing] = useState(false);
+// ── Mock data imports ─────────────────────────────────────────────────────────
+import userData from '../../mockData/user.json';
+import accountsData from '../../mockData/accounts.json';
+import transactionsData from '../../mockData/transactions.json';
 
-  // Mock data
-  const quickActions = [
-    { id: '1', title: 'Fund Transfer', icon: 'send', color: COLORS.primary },
-    { id: '2', title: 'UPI Pay', icon: 'zap', color: COLORS.accent },
-    { id: '3', title: 'View Statements', icon: 'file-text', color: COLORS.info },
-    { id: '4', title: 'Security Check', icon: 'shield', color: COLORS.danger },
-  ];
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const CARD_WIDTH = SCREEN_WIDTH - SPACING.lg * 2; // Full width minus horizontal padding
 
-  const recentTransactions = [
-    { id: '1', description: 'Grocery Purchase', amount: -2450, date: 'Today', category: 'Shopping', status: 'SUCCESS' },
-    { id: '2', description: 'Salary Credit', amount: 50000, date: 'Yesterday', category: 'Income', status: 'SUCCESS' },
-    { id: '3', description: 'Electricity Bill', amount: -1200, date: 'Jun 8', category: 'Utilities', status: 'SUCCESS' },
-    { id: '4', description: 'Investment Return', amount: 2500, date: 'Jun 7', category: 'Investment', status: 'SUCCESS' },
-  ];
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const formatCurrency = (amount: number): string => {
+  const abs = Math.abs(amount);
+  return '₹' + abs.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
 
-  const securityStatus = {
-    level: 'LOW' as const,
-    score: 12,
-    signals: [
-      { type: 'DEVICE', status: 'TRUSTED', description: 'iPhone 14, Delhi' },
-      { type: 'TIME', status: 'NORMAL', description: 'Daytime activity' },
-      { type: 'BEHAVIOR', status: 'NORMAL', description: 'Regular spending pattern' },
-    ]
+const getGreeting = (): string => {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+};
+
+const formatLastLogin = (isoString: string): string => {
+  const date = new Date(isoString);
+  return date.toLocaleString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+};
+
+const formatTransactionTime = (isoString: string): string => {
+  const txDate = new Date(isoString);
+  const now = new Date();
+  const todayStr = now.toDateString();
+  const txStr = txDate.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  if (txStr === todayStr) return 'Today';
+  if (txStr === yesterday.toDateString()) return 'Yesterday';
+  return txDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+};
+
+// Category → icon mapping
+const getCategoryIcon = (category: string): string => {
+  const map: Record<string, string> = {
+    Shopping: 'shopping-bag',
+    Income: 'trending-up',
+    Utilities: 'zap',
+    Transfer: 'send',
+    'Food & Dining': 'coffee',
+    Travel: 'map-pin',
+    Health: 'heart',
+    Entertainment: 'film',
   };
+  return map[category] || 'circle';
+};
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setRefreshing(false);
+const getCategoryColor = (category: string): string => {
+  const map: Record<string, string> = {
+    Shopping: '#6366F1',
+    Income: COLORS.success,
+    Utilities: '#F59E0B',
+    Transfer: COLORS.primary,
+    'Food & Dining': '#EF4444',
+    Travel: '#06B6D4',
+    Health: '#EC4899',
+    Entertainment: '#8B5CF6',
   };
+  return map[category] || COLORS.textTertiary;
+};
 
-  const renderTransactionItem = ({ item }: any) => (
-    <TouchableOpacity style={styles.transactionItem}>
-      <View style={styles.transactionContent}>
-        <View>
-          <Text style={styles.transactionDescription}>{item.description}</Text>
-          <Text style={styles.transactionCategory}>{item.category}</Text>
-        </View>
-        <Text style={[
-          styles.transactionAmount,
-          { color: item.amount > 0 ? COLORS.success : COLORS.danger }
-        ]}>
-          {item.amount > 0 ? '+' : ''}₹{Math.abs(item.amount).toLocaleString()}
-        </Text>
-      </View>
-      <Text style={styles.transactionDate}>{item.date}</Text>
-    </TouchableOpacity>
-  );
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+// Account Card — single slide in the carousel
+const AccountCard = ({ account }: { account: typeof accountsData[0] }) => {
+  const [balanceVisible, setBalanceVisible] = useState(true);
+
+  // Color per bank
+  const isPSB = account.bankName.includes('Punjab');
+  const cardBg = isPSB ? COLORS.primaryDark : '#1B3A6B'; // PSB dark green vs SBI dark blue
+  const accentBar = isPSB ? COLORS.accent : '#3B82F6';
 
   return (
-    <ScrollView 
-      style={styles.container}
-      contentContainerStyle={styles.contentContainer}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={COLORS.primary} />
-      }
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.greeting}>Good morning, Swayam!</Text>
-        <Text style={styles.lastLogin}>Last login: Today, 09:15 AM</Text>
+    <View style={[styles.accountCard, { backgroundColor: cardBg, width: CARD_WIDTH }]}>
+      {/* Decorative top accent strip */}
+      <View style={[styles.accountCardAccent, { backgroundColor: accentBar }]} />
+
+      {/* Bank name + account type */}
+      <View style={styles.accountCardHeader}>
+        <View>
+          <Text style={styles.accountBankName}>{account.bankName}</Text>
+          <View style={styles.accountTypeRow}>
+            <Text style={styles.accountType}>{account.accountType} A/c</Text>
+            <GlossaryPopup term={
+              account.accountType === 'Savings' ? 'SAVINGS_ACCOUNT'
+              : account.accountType === 'Current' ? 'CURRENT_ACCOUNT'
+              : 'SALARY_ACCOUNT'
+            }>
+              <Feather name="help-circle" size={13} color={COLORS.textOnDarkSub} />
+            </GlossaryPopup>
+          </View>
+        </View>
+        {account.isPrimary && (
+          <View style={styles.primaryBadge}>
+            <Text style={styles.primaryBadgeText}>Primary</Text>
+          </View>
+        )}
       </View>
 
-      {/* Net Worth Card */}
-      <Card style={styles.netWorthCard}>
-        <View style={styles.netWorthHeader}>
-          <Text style={styles.netWorthLabel}>Available Balance</Text>
-          <TouchableOpacity>
-            <Feather name="refresh-cw" size={20} color={COLORS.textSecondary} />
-          </TouchableOpacity>
-        </View>
-        <Text style={styles.balance}>₹48,750.00</Text>
-        <View style={styles.netWorthDetails}>
-          <View style={styles.detailItem}>
-            <Text style={styles.detailValue}>₹52,000</Text>
-            <Text style={styles.detailLabel}>Total Assets</Text>
-          </View>
-          <View style={styles.detailItem}>
-            <Text style={styles.detailValue}>₹3,250</Text>
-            <Text style={styles.detailLabel}>Total Liabilities</Text>
-          </View>
-          <View style={styles.detailItem}>
-            <Text style={styles.detailValue}>₹48,750</Text>
-            <Text style={styles.detailLabel}>Net Worth</Text>
-          </View>
-        </View>
-      </Card>
+      {/* Masked account number */}
+      <Text style={styles.accountNumber}>{account.accountNumberMasked}</Text>
 
-      {/* Security Status Card */}
-      <Card style={styles.securityCard}>
-        <View style={styles.securityHeader}>
-          <Feather name="shield" size={20} color={COLORS.primary} />
-          <Text style={styles.securityTitle}>Security Status</Text>
-          <RiskBadge level={securityStatus.level} showIcon={false} size="sm" />
+      {/* Balance row */}
+      <View style={styles.balanceRow}>
+        <View>
+          <Text style={styles.balanceLabel}>Available Balance</Text>
+          <Text style={styles.balanceAmount}>
+            {balanceVisible ? formatCurrency(account.balance) : '₹ ••••••'}
+          </Text>
         </View>
-        
-        <View style={styles.securityStats}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>98%</Text>
-            <Text style={styles.statLabel}>Protection</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>0</Text>
-            <Text style={styles.statLabel}>Active Threats</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>Active</Text>
-            <Text style={styles.statLabel}>Monitoring</Text>
-          </View>
-        </View>
-
-        {/* Security Signals */}
-        <View style={styles.securitySignals}>
-          {securityStatus.signals.map((signal, index) => (
-            <View key={index} style={styles.signalItem}>
-              <Feather 
-                name={signal.status === 'TRUSTED' || signal.status === 'NORMAL' ? 'check-circle' : 'alert-circle'} 
-                size={16} 
-                color={signal.status === 'TRUSTED' || signal.status === 'NORMAL' ? COLORS.success : COLORS.warning} 
-              />
-              <Text style={styles.signalText}>{signal.description}</Text>
-            </View>
-          ))}
-        </View>
-      </Card>
-
-      {/* Quick Actions */}
-      <View style={styles.actionsContainer}>
-        <Text style={styles.sectionTitle}>Quick Actions</Text>
-        <View style={styles.actionsGrid}>
-          {quickActions.map((action) => (
-            <TouchableOpacity key={action.id} style={styles.actionItem}>
-              <View style={[styles.actionIcon, { backgroundColor: action.color + '10' }]}>
-                <Feather name={action.icon as any} size={24} color={action.color} />
-              </View>
-              <Text style={styles.actionTitle}>{action.title}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      {/* Recent Transactions */}
-      <View style={styles.transactionsContainer}>
-        <View style={styles.transactionsHeader}>
-          <Text style={styles.sectionTitle}>Recent Transactions</Text>
-          <TouchableOpacity>
-            <Text style={styles.viewAllText}>View All</Text>
-          </TouchableOpacity>
-        </View>
-        <FlatList
-          data={recentTransactions}
-          renderItem={renderTransactionItem}
-          keyExtractor={(item) => item.id}
-          showsVerticalScrollIndicator={false}
-          scrollEnabled={false}
-        />
-      </View>
-
-      {/* Wealth Insights */}
-      <Card style={styles.insightsCard}>
-        <View style={styles.insightsHeader}>
-          <Feather name="trending-up" size={20} color={COLORS.success} />
-          <Text style={styles.insightsTitle}>Wealth Insights</Text>
-        </View>
-        <Text style={styles.insightsText}>Your financial health is improving! Your monthly savings have increased by 15% compared to last month.</Text>
-        <TouchableOpacity style={styles.insightsButton}>
-          <Text style={styles.insightsButtonText}>View Full Analysis</Text>
+        <TouchableOpacity
+          onPress={() => setBalanceVisible(!balanceVisible)}
+          style={styles.eyeBtn}
+          activeOpacity={0.7}
+        >
+          <Feather
+            name={balanceVisible ? 'eye' : 'eye-off'}
+            size={20}
+            color={COLORS.textOnDarkSub}
+          />
         </TouchableOpacity>
-      </Card>
+      </View>
 
-      {/* Trusted Devices Alert */}
-      <ExplainableAlert
-        type="info"
-        title="Trusted Devices"
-        explanation="This device is registered as trusted. You can manage your trusted devices from the security settings."
-        actionText="Manage Devices"
-        onAction={() => console.log('Manage devices pressed')}
-      />
-    </ScrollView>
+      {/* Quick action buttons on card */}
+      <View style={styles.cardActions}>
+        <TouchableOpacity style={styles.cardActionBtn}>
+          <Feather name="send" size={14} color={COLORS.textOnDark} />
+          <Text style={styles.cardActionText}>Send</Text>
+        </TouchableOpacity>
+        <View style={styles.cardActionDivider} />
+        <TouchableOpacity style={styles.cardActionBtn}>
+          <Feather name="file-text" size={14} color={COLORS.textOnDark} />
+          <Text style={styles.cardActionText}>Statement</Text>
+        </TouchableOpacity>
+        <View style={styles.cardActionDivider} />
+        <TouchableOpacity style={styles.cardActionBtn}>
+          <Feather name="refresh-cw" size={14} color={COLORS.textOnDark} />
+          <Text style={styles.cardActionText}>Refresh</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 };
 
+// Dot indicators for the carousel
+const CarouselDots = ({ count, active }: { count: number; active: number }) => (
+  <View style={styles.dotsRow}>
+    {Array.from({ length: count }).map((_, i) => (
+      <View
+        key={i}
+        style={[
+          styles.dot,
+          i === active ? styles.dotActive : styles.dotInactive,
+        ]}
+      />
+    ))}
+  </View>
+);
+
+// Protection Status card — replaces the old confusing "security status"
+const ProtectionStatusCard = () => {
+  const signals = [
+    { icon: 'smartphone', label: 'iPhone 14 Pro, Delhi', ok: true },
+    { icon: 'sun', label: 'Daytime activity', ok: true },
+    { icon: 'activity', label: 'Regular spending pattern', ok: true },
+  ];
+
+  return (
+    <View style={styles.protectionCard}>
+      {/* Header */}
+      <View style={styles.protectionHeader}>
+        <View style={styles.protectionIconWrap}>
+          <Feather name="shield" size={18} color={COLORS.success} />
+        </View>
+        <View style={{ flex: 1, marginLeft: SPACING.sm }}>
+          <Text style={styles.protectionTitle}>Your Account is Protected</Text>
+          <Text style={styles.protectionSub}>All systems active · No threats detected</Text>
+        </View>
+        {/* Animated pulse dot */}
+        <View style={styles.pulseDotOuter}>
+          <View style={styles.pulseDotInner} />
+        </View>
+      </View>
+
+      {/* Signal list */}
+      <View style={styles.signalList}>
+        {signals.map((s, i) => (
+          <View key={i} style={styles.signalRow}>
+            <Feather
+              name={s.icon as any}
+              size={14}
+              color={s.ok ? COLORS.textSecondary : COLORS.danger}
+            />
+            <Text style={styles.signalLabel}>{s.label}</Text>
+            <Feather
+              name={s.ok ? 'check' : 'x'}
+              size={14}
+              color={s.ok ? COLORS.success : COLORS.danger}
+            />
+          </View>
+        ))}
+      </View>
+
+      {/* Footer hint */}
+      <View style={styles.protectionFooter}>
+        <Feather name="info" size={12} color={COLORS.textTertiary} />
+        <Text style={styles.protectionFooterText}>
+          Fraud monitoring is always on — 24 hours a day, 7 days a week
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+// Transaction row
+const TransactionRow = ({ txn }: { txn: typeof transactionsData[0] }) => {
+  const isCredit = txn.amount > 0;
+  const isBlocked = txn.decision === 'BLOCK';
+  const isWarn = txn.decision === 'WARN';
+  const iconName = getCategoryIcon(txn.merchantCategory);
+  const iconColor = isBlocked ? COLORS.danger : getCategoryColor(txn.merchantCategory);
+
+  return (
+    <TouchableOpacity style={styles.txnRow} activeOpacity={0.7}>
+      {/* Icon */}
+      <View style={[styles.txnIcon, { backgroundColor: iconColor + '18' }]}>
+        <Feather name={iconName as any} size={18} color={iconColor} />
+      </View>
+
+      {/* Details */}
+      <View style={styles.txnDetails}>
+        <Text style={styles.txnName} numberOfLines={1}>{txn.merchantName}</Text>
+        <View style={styles.txnMeta}>
+          <Text style={styles.txnDate}>{formatTransactionTime(txn.transactionTime)}</Text>
+          {/* Channel badge */}
+          <View style={styles.channelBadge}>
+            <Text style={styles.channelText}>{txn.channel}</Text>
+          </View>
+          {/* Blocked/Warn badge */}
+          {isBlocked && (
+            <View style={styles.blockedBadge}>
+              <Feather name="shield" size={10} color={COLORS.danger} />
+              <Text style={styles.blockedText}>Stopped</Text>
+            </View>
+          )}
+          {isWarn && !isBlocked && (
+            <View style={styles.warnBadge}>
+              <Feather name="alert-triangle" size={10} color={COLORS.caution} />
+              <Text style={styles.warnBadgeText}>Flagged</Text>
+            </View>
+          )}
+        </View>
+      </View>
+
+      {/* Amount */}
+      <Text
+        style={[
+          styles.txnAmount,
+          {
+            color: isBlocked
+              ? COLORS.textTertiary
+              : isCredit
+              ? COLORS.success
+              : COLORS.text,
+          },
+        ]}
+      >
+        {isBlocked
+          ? '—'
+          : `${isCredit ? '+' : '-'}${formatCurrency(txn.amount)}`}
+      </Text>
+    </TouchableOpacity>
+  );
+};
+
+// Wealth Tip card — single line from the wealth engine
+const WealthTipCard = () => (
+  <View style={styles.tipCard}>
+    <View style={styles.tipIconWrap}>
+      <Feather name="trending-up" size={18} color={COLORS.accent} />
+    </View>
+    <View style={{ flex: 1 }}>
+      <Text style={styles.tipLabel}>Smart Tip</Text>
+      <Text style={styles.tipText}>
+        Your savings rate is 65% this month — great! Consider opening a Fixed Deposit
+        to earn more interest on your idle balance.
+      </Text>
+    </View>
+    <TouchableOpacity style={styles.tipArrow}>
+      <Feather name="chevron-right" size={18} color={COLORS.accent} />
+    </TouchableOpacity>
+  </View>
+);
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+const DashboardScreen = ({ navigation }: any) => {
+  const insets = useSafeAreaInsets();
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeCardIndex, setActiveCardIndex] = useState(0);
+  const carouselRef = useRef<ScrollView>(null);
+
+  const quickActions = [
+    {
+      id: '1',
+      title: 'Send Money',
+      icon: 'send',
+      color: COLORS.primary,
+      onPress: () => navigation.navigate('SendTab'),
+    },
+    {
+      id: '2',
+      title: 'UPI Pay',
+      icon: 'zap',
+      color: '#6366F1',
+      onPress: () => {},
+    },
+    {
+      id: '3',
+      title: 'Pay Bills',
+      icon: 'file-text',
+      color: '#F59E0B',
+      onPress: () => {},
+    },
+    {
+      id: '4',
+      title: 'Check Safety',
+      icon: 'shield',
+      color: COLORS.success,
+      onPress: () => navigation.navigate('SafetyTab'),
+    },
+  ];
+
+  // Total balance across all accounts
+  const totalBalance = accountsData.reduce((sum, acc) => sum + acc.balance, 0);
+
+  // Recent 5 transactions, most recent first
+  const recentTxns = [...transactionsData]
+    .sort((a, b) => new Date(b.transactionTime).getTime() - new Date(a.transactionTime).getTime())
+    .slice(0, 5);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    setRefreshing(false);
+  }, []);
+
+  const handleCarouselScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const index = Math.round(e.nativeEvent.contentOffset.x / CARD_WIDTH);
+    setActiveCardIndex(Math.max(0, Math.min(index, accountsData.length - 1)));
+  };
+
+  return (
+    <>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.primaryDark} />
+      <ScrollView
+        style={styles.container}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={COLORS.textOnDark}
+            colors={[COLORS.primary]}
+          />
+        }
+      >
+        {/* ── Hero section (green background continues from nav header) ── */}
+        <View style={styles.hero}>
+          {/* Greeting */}
+          <View style={styles.greetingRow}>
+            <View>
+              <Text style={styles.greeting}>
+                {getGreeting()}, {userData.firstName}!
+              </Text>
+              <Text style={styles.lastLogin}>
+                Last login: {formatLastLogin(userData.lastLogin)}
+              </Text>
+            </View>
+            {/* Total across all accounts — shown in hero */}
+            <View style={styles.totalWrap}>
+              <Text style={styles.totalLabel}>Total</Text>
+              <Text style={styles.totalAmount}>{formatCurrency(totalBalance)}</Text>
+            </View>
+          </View>
+
+          {/* Account card carousel */}
+          <ScrollView
+            ref={carouselRef}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={handleCarouselScroll}
+            decelerationRate="fast"
+            snapToInterval={CARD_WIDTH}
+            contentContainerStyle={styles.carouselContent}
+            style={styles.carousel}
+          >
+            {accountsData.map((account) => (
+              <AccountCard key={account.accountId} account={account} />
+            ))}
+          </ScrollView>
+
+          {/* Dot indicators */}
+          <CarouselDots count={accountsData.length} active={activeCardIndex} />
+        </View>
+
+        {/* ── Content area (white/light background) ── */}
+        <View style={styles.content}>
+
+          {/* Quick Actions — single horizontal row like PSB app */}
+          <View style={styles.quickActionsSection}>
+            {quickActions.map((action) => (
+              <TouchableOpacity
+                key={action.id}
+                style={styles.quickAction}
+                onPress={action.onPress}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.quickActionIcon, { backgroundColor: action.color + '15' }]}>
+                  <Feather name={action.icon as any} size={22} color={action.color} />
+                </View>
+                <Text style={styles.quickActionLabel}>{action.title}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Divider */}
+          <View style={styles.sectionDivider} />
+
+          {/* Protection Status */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Account Protection</Text>
+            <ProtectionStatusCard />
+          </View>
+
+          {/* Divider */}
+          <View style={styles.sectionDivider} />
+
+          {/* Recent Transactions */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Recent Transactions</Text>
+              <TouchableOpacity activeOpacity={0.7}>
+                <Text style={styles.viewAllText}>View All</Text>
+              </TouchableOpacity>
+            </View>
+
+            {recentTxns.map((txn) => (
+              <TransactionRow key={txn.transactionId} txn={txn} />
+            ))}
+          </View>
+
+          {/* Divider */}
+          <View style={styles.sectionDivider} />
+
+          {/* Smart Wealth Tip */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Wealth Insight</Text>
+            <WealthTipCard />
+          </View>
+
+          {/* Bottom padding so last card doesn't sit on tab bar */}
+          <View style={{ height: SPACING.xxl }} />
+        </View>
+      </ScrollView>
+    </>
+  );
+};
+
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: COLORS.primaryDark, // Hero bg = same as header
   },
-  contentContainer: {
-    padding: SPACING.lg,
-    paddingBottom: SPACING.xxl,
+
+  // ── Hero ──────────────────────────────────────────────────────────────────
+  hero: {
+    backgroundColor: COLORS.primaryDark,
+    paddingBottom: SPACING.lg,
   },
-  header: {
-    marginBottom: SPACING.xl,
+  greetingRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.md,
+    paddingBottom: SPACING.lg,
   },
   greeting: {
     ...TYPOGRAPHY.h3,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.xs,
+    color: COLORS.textOnDark,
+    fontWeight: '700',
   },
   lastLogin: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textOnDarkSub,
+    marginTop: 2,
   },
-  netWorthCard: {
-    marginBottom: SPACING.lg,
+  totalWrap: {
+    alignItems: 'flex-end',
+  },
+  totalLabel: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textOnDarkSub,
+  },
+  totalAmount: {
+    ...TYPOGRAPHY.h4,
+    color: COLORS.accent,
+    fontWeight: '700',
+  },
+
+  // ── Carousel ──────────────────────────────────────────────────────────────
+  carousel: {
+    // Full width, cards sized by CARD_WIDTH
+  },
+  carouselContent: {
+    paddingHorizontal: SPACING.lg,
+    gap: SPACING.lg,
+  },
+  accountCard: {
+    borderRadius: BORDER_RADIUS.xl,
     padding: SPACING.lg,
+    overflow: 'hidden',
+    ...SHADOWS.large,
   },
-  netWorthHeader: {
+  accountCardAccent: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+  },
+  accountCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: SPACING.sm,
+    marginTop: SPACING.xs,
+  },
+  accountBankName: {
+    ...TYPOGRAPHY.label,
+    color: COLORS.textOnDarkSub,
+    fontWeight: '600',
+  },
+  accountTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginTop: 2,
+  },
+  accountType: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textOnDarkSub,
+  },
+  primaryBadge: {
+    backgroundColor: COLORS.accent + '30',
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: COLORS.accent + '50',
+  },
+  primaryBadgeText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.accent,
+  },
+  accountNumber: {
+    ...TYPOGRAPHY.h4,
+    color: COLORS.textOnDark,
+    letterSpacing: 2,
+    marginBottom: SPACING.md,
+    fontWeight: '600',
+  },
+  balanceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginBottom: SPACING.lg,
+  },
+  balanceLabel: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textOnDarkSub,
+    marginBottom: 2,
+  },
+  balanceAmount: {
+    ...TYPOGRAPHY.display,
+    color: COLORS.textOnDark,
+    fontWeight: '700',
+  },
+  eyeBtn: {
+    padding: SPACING.sm,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: BORDER_RADIUS.full,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.15)',
+    paddingTop: SPACING.md,
+  },
+  cardActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xs,
+  },
+  cardActionText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.textOnDark,
+  },
+  cardActionDivider: {
+    width: 1,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    marginVertical: 2,
+  },
+
+  // ── Dots ──────────────────────────────────────────────────────────────────
+  dotsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: SPACING.md,
+    gap: SPACING.xs,
+  },
+  dot: {
+    borderRadius: BORDER_RADIUS.full,
+    height: 6,
+  },
+  dotActive: {
+    width: 20,
+    backgroundColor: COLORS.accent,
+  },
+  dotInactive: {
+    width: 6,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+
+  // ── Content (white area below hero) ───────────────────────────────────────
+  content: {
+    backgroundColor: COLORS.background,
+    borderTopLeftRadius: BORDER_RADIUS.xxxl,
+    borderTopRightRadius: BORDER_RADIUS.xxxl,
+    marginTop: -BORDER_RADIUS.xl, // Overlap with hero for seamless curve
+    paddingTop: SPACING.xl,
+  },
+
+  // ── Quick Actions ─────────────────────────────────────────────────────────
+  quickActionsSection: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingHorizontal: SPACING.md,
+    paddingBottom: SPACING.lg,
+  },
+  quickAction: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  quickActionIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: BORDER_RADIUS.xl,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: SPACING.xs,
+  },
+  quickActionLabel: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.text,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+
+  // ── Section ───────────────────────────────────────────────────────────────
+  sectionDivider: {
+    height: SPACING.xs,
+    backgroundColor: COLORS.divider,
+  },
+  section: {
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.lg,
+  },
+  sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.sm,
-  },
-  netWorthLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-  },
-  balance: {
-    ...TYPOGRAPHY.h1,
-    fontWeight: '700',
-    color: COLORS.accent,
     marginBottom: SPACING.md,
-  },
-  netWorthDetails: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    paddingTop: SPACING.md,
-  },
-  detailItem: {
-    alignItems: 'center',
-  },
-  detailValue: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  detailLabel: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.textSecondary,
-    marginTop: SPACING.xs,
-  },
-  securityCard: {
-    marginBottom: SPACING.lg,
-    padding: SPACING.lg,
-  },
-  securityHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.md,
-  },
-  securityTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginLeft: SPACING.sm,
-    flex: 1,
-  },
-  securityStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: SPACING.md,
-  },
-  statItem: {
-    alignItems: 'center',
-  },
-  statValue: {
-    ...TYPOGRAPHY.h3,
-    fontWeight: '700',
-    color: COLORS.primary,
-  },
-  statLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-    marginTop: SPACING.xs,
-  },
-  securitySignals: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    paddingTop: SPACING.md,
-  },
-  signalItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
-  },
-  signalText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-    marginLeft: SPACING.sm,
-  },
-  actionsContainer: {
-    marginBottom: SPACING.lg,
   },
   sectionTitle: {
     ...TYPOGRAPHY.h4,
-    fontWeight: '600',
     color: COLORS.text,
-    marginBottom: SPACING.md,
-  },
-  actionsGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-  },
-  actionItem: {
-    width: '48%',
-    alignItems: 'center',
-    backgroundColor: COLORS.surface,
-    padding: SPACING.lg,
-    borderRadius: BORDER_RADIUS.lg,
-    marginBottom: SPACING.md,
-    ...SHADOWS.small,
-  },
-  actionIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
-  },
-  actionTitle: {
-    ...TYPOGRAPHY.bodySm,
-    fontWeight: '600',
-    color: COLORS.text,
-    textAlign: 'center',
-  },
-  transactionsContainer: {
-    marginBottom: SPACING.lg,
-  },
-  transactionsHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    fontWeight: '700',
     marginBottom: SPACING.md,
   },
   viewAllText: {
-    ...TYPOGRAPHY.bodySm,
+    ...TYPOGRAPHY.bodySmMedium,
     color: COLORS.primary,
-    fontWeight: '600',
+    marginBottom: SPACING.md,
   },
-  transactionItem: {
+
+  // ── Protection Status card ────────────────────────────────────────────────
+  protectionCard: {
     backgroundColor: COLORS.surface,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
-    marginBottom: SPACING.sm,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.success + '30',
     ...SHADOWS.small,
   },
-  transactionContent: {
+  protectionHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.xs,
+    marginBottom: SPACING.md,
   },
-  transactionDescription: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
+  protectionIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.success + '15',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  protectionTitle: {
+    ...TYPOGRAPHY.bodyMedium,
     color: COLORS.text,
-  },
-  transactionCategory: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-  },
-  transactionAmount: {
-    ...TYPOGRAPHY.body,
     fontWeight: '600',
   },
-  transactionDate: {
+  protectionSub: {
     ...TYPOGRAPHY.caption,
     color: COLORS.textSecondary,
+    marginTop: 1,
   },
-  insightsCard: {
-    marginBottom: SPACING.lg,
-    padding: SPACING.lg,
+  pulseDotOuter: {
+    width: 16,
+    height: 16,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.success + '25',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  insightsHeader: {
+  pulseDotInner: {
+    width: 8,
+    height: 8,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.success,
+  },
+  signalList: {
+    gap: SPACING.sm,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    paddingTop: SPACING.md,
+    marginBottom: SPACING.sm,
+  },
+  signalRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: SPACING.md,
+    gap: SPACING.sm,
   },
-  insightsTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginLeft: SPACING.sm,
-  },
-  insightsText: {
-    ...TYPOGRAPHY.body,
+  signalLabel: {
+    ...TYPOGRAPHY.bodySm,
     color: COLORS.textSecondary,
-    marginBottom: SPACING.md,
+    flex: 1,
   },
-  insightsButton: {
-    backgroundColor: COLORS.primary,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
+  protectionFooter: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: SPACING.xs,
+    marginTop: SPACING.sm,
+    paddingTop: SPACING.sm,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
   },
-  insightsButtonText: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.surface,
+  protectionFooterText: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+    flex: 1,
+  },
+
+  // ── Transaction rows ──────────────────────────────────────────────────────
+  txnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.divider,
+    gap: SPACING.md,
+  },
+  txnIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: BORDER_RADIUS.lg,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  txnDetails: {
+    flex: 1,
+    minWidth: 0,
+  },
+  txnName: {
+    ...TYPOGRAPHY.bodySmMedium,
+    color: COLORS.text,
     fontWeight: '600',
+    marginBottom: 2,
+  },
+  txnMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: SPACING.xs,
+  },
+  txnDate: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+  },
+  channelBadge: {
+    backgroundColor: COLORS.primaryVeryLight,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 1,
+  },
+  channelText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.primaryMedium,
+  },
+  blockedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: COLORS.dangerLight,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 1,
+  },
+  blockedText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.danger,
+  },
+  warnBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: COLORS.cautionLight,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 1,
+  },
+  warnBadgeText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.caution,
+  },
+  txnAmount: {
+    ...TYPOGRAPHY.bodySmMedium,
+    fontWeight: '700',
+    flexShrink: 0,
+  },
+
+  // ── Wealth tip ────────────────────────────────────────────────────────────
+  tipCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: COLORS.accentLight,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.accent + '30',
+    gap: SPACING.md,
+  },
+  tipIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.accent + '20',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  tipLabel: {
+    ...TYPOGRAPHY.overline,
+    color: COLORS.accentDark,
+    marginBottom: SPACING.xs,
+  },
+  tipText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.text,
+    lineHeight: 20,
+  },
+  tipArrow: {
+    padding: SPACING.xs,
+    alignSelf: 'center',
+    flexShrink: 0,
   },
 });
 

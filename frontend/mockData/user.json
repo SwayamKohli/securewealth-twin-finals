@@ -1,10 +1,18 @@
 {
   "id": "USR-001",
   "name": "Swayam Kohli",
+  "firstName": "Swayam",
   "email": "swayam.kohli@psb.com",
   "phone": "+91-9876543210",
-  "lastLogin": "2026-06-12T10:30:00Z",
+  "lastLogin": "2026-06-14T09:15:00Z",
   "riskProfile": "MODERATE",
   "createdAt": "2024-01-15T09:00:00Z",
-  "updatedAt": "2026-06-12T10:30:00Z"
+  "updatedAt": "2026-06-14T09:15:00Z",
+  "kycStatus": "VERIFIED",
+  "deviceTrust": {
+    "currentDevice": "iPhone 14 Pro",
+    "location": "Delhi, India",
+    "isTrusted": true,
+    "registeredSince": "2024-01-15T09:00:00Z"
+  }
 }

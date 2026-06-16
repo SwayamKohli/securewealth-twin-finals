@@ -1,733 +1,767 @@
 // src/screens/AuditDashboardScreen.tsx
+// SecureWealth Twin — Security Audit Dashboard (Admin / Bank Officer Only)
+//
+// This screen is NOT part of the user-facing tab navigator. It is accessed
+// via the admin modal stack (Profile tab -> Admin: Audit Dashboard button).
+//
+// Shows bank officers:
+//   1. Summary counts (total events / verified / tamper attempts)
+//   2. Hash chain visual (live from audit_logs.json hashes)
+//   3. Audit log list (tap any row for detail sheet)
+//   4. Detail sheet: replica verification, recovery events, tech fields
+//
+// Fixes from original:
+//  - COLORS.warning -> COLORS.caution (Batch 1 semantic name)
+//  - Three style strings had unclosed quotes: alignItems: 'center, -> fixed
+//  - File was truncated mid-styles block -> completed
+//  - FlatList inside ScrollView (virtualization warning) -> replaced with .map()
+//  - Detail "modal" was a View inside ScrollView (not a real modal) -> proper Modal
+//  - getIntegrityBadge returned RiskBadge with wrong semantic levels
+//    (VERIFIED -> LOW is confusing for officers). Replaced with a proper
+//    integrity badge component using direct color mapping.
+//  - COLORS.warning references in decision coloring -> COLORS.caution
+//  - HashChainVisual now receives replicaStatuses built from audit data
+
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList, RefreshControl } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Modal,
+  RefreshControl,
+} from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import Card from '../components/common/Card';
-import RiskBadge from '../components/common/RiskBadge';
-import HashChainVisual from '../components/common/HashChainVisual';
+import HashChainVisual, { ReplicaStatus } from '../components/common/HashChainVisual';
+import auditLogsData from '../../mockData/audit_logs.json';
 
-const AuditDashboardScreen = () => {
-  const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState('ALL');
-  const [selectedAudit, setSelectedAudit] = useState<any>(null);
+// ── Types ─────────────────────────────────────────────────────────────────────
+type IntegrityStatus = 'VERIFIED' | 'TAMPER_DETECTED' | 'PENDING';
+type AuditDecision = 'ALLOW' | 'BLOCK' | 'WARN' | 'CHALLENGE' | 'TAMPER_DETECTED';
 
-  // Mock audit data
-  const auditLogs = [
-    {
-      id: 'AUD-501',
-      timestamp: '2026-06-12T01:10:22Z',
-      userId: 'USR-001',
-      eventType: 'BLOCK_TRANSACTION',
-      eventDetails: {
-        transactionId: 'TXN-004',
-        amount: 50000,
-        merchant: 'XYZ Ltd',
-        reason: 'New device + night owl + fast OTP'
-      },
-      previousHash: 'ABC123DEF456',
-      currentHash: 'XYZ789GHI012',
-      signature: 'SIG_AUD_001',
-      riskScore: 92,
-      decision: 'BLOCK',
-      integrityStatus: 'VERIFIED' as const,
-      replicaVerification: {
-        master: 'VERIFIED',
-        replicaA: 'VERIFIED',
-        replicaB: 'VERIFIED',
-        replicaC: 'VERIFIED'
-      }
-    },
-    {
-      id: 'AUD-502',
-      timestamp: '2026-06-12T02:15:33Z',
-      userId: 'USR-001',
-      eventType: 'ALLOW_LOGIN',
-      eventDetails: {
-        ipAddress: '192.168.1.100',
-        location: 'Delhi, India',
-        device: 'iPhone 14 Pro'
-      },
-      previousHash: 'XYZ789GHI012',
-      currentHash: 'JKL345MNO678',
-      signature: 'SIG_AUD_002',
-      riskScore: 12,
-      decision: 'ALLOW',
-      integrityStatus: 'VERIFIED' as const,
-      replicaVerification: {
-        master: 'VERIFIED',
-        replicaA: 'VERIFIED',
-        replicaB: 'VERIFIED',
-        replicaC: 'VERIFIED'
-      }
-    },
-    {
-      id: 'AUD-503',
-      timestamp: '2026-06-11T23:45:11Z',
-      userId: 'USR-001',
-      eventType: 'BLOCK_TRANSACTION',
-      eventDetails: {
-        transactionId: 'TXN-005',
-        amount: 75000,
-        merchant: 'FakeShop Online',
-        reason: 'Phishing attempt detected'
-      },
-      previousHash: 'JKL345MNO678',
-      currentHash: 'PQR901STU234',
-      signature: 'SIG_AUD_003',
-      riskScore: 98,
-      decision: 'BLOCK',
-      integrityStatus: 'TAMPER_DETECTED' as const,
-      replicaVerification: {
-        master: 'MODIFIED',
-        replicaA: 'VERIFIED',
-        replicaB: 'VERIFIED',
-        replicaC: 'VERIFIED',
-        recoveryEvent: {
-          timestamp: '2026-06-12T00:00:00Z',
-          restoredFrom: 'Replica A',
-          alertGenerated: true
-        }
-      }
-    },
-    {
-      id: 'AUD-504',
-      timestamp: '2026-06-11T22:30:45Z',
-      userId: 'USR-002',
-      eventType: 'REVIEW_TRANSACTION',
-      eventDetails: {
-        transactionId: 'TXN-006',
-        amount: 25000,
-        merchant: 'Investment Firm',
-        reason: 'Unknown merchant'
-      },
-      previousHash: 'PQR901STU234',
-      currentHash: 'VWX567YZA890',
-      signature: 'SIG_AUD_004',
-      riskScore: 68,
-      decision: 'REVIEW',
-      integrityStatus: 'VERIFIED' as const,
-      replicaVerification: {
-        master: 'VERIFIED',
-        replicaA: 'VERIFIED',
-        replicaB: 'VERIFIED',
-        replicaC: 'VERIFIED'
-      }
-    },
-  ];
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const formatTime = (iso: string) =>
+  new Date(iso).toLocaleString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setRefreshing(false);
-  };
+const decisionColor = (d: string): string => {
+  if (d === 'ALLOW') return COLORS.success;
+  if (d === 'BLOCK') return COLORS.danger;
+  if (d === 'TAMPER_DETECTED') return COLORS.danger;
+  if (d === 'WARN') return COLORS.caution;
+  if (d === 'CHALLENGE') return COLORS.challenge;
+  return COLORS.textSecondary;
+};
 
-  const getIntegrityColor = (status: string) => {
-    switch (status) {
-      case 'VERIFIED': return COLORS.success;
-      case 'TAMPER_DETECTED': return COLORS.danger;
-      case 'PENDING': return COLORS.warning;
-      default: return COLORS.text;
-    }
-  };
+const decisionIcon = (d: string): string => {
+  if (d === 'ALLOW') return 'check-circle';
+  if (d === 'BLOCK') return 'x-circle';
+  if (d === 'TAMPER_DETECTED') return 'alert-triangle';
+  if (d === 'WARN') return 'alert-circle';
+  return 'circle';
+};
 
-  const getIntegrityBadge = (status: string) => {
-    switch (status) {
-      case 'VERIFIED': 
-        return <RiskBadge level="LOW" showIcon={true} size="sm" />;
-      case 'TAMPER_DETECTED': 
-        return <RiskBadge level="CRITICAL" showIcon={true} size="sm" />;
-      case 'PENDING': 
-        return <RiskBadge level="MEDIUM" showIcon={true} size="sm" />;
-      default: 
-        return <RiskBadge level="LOW" showIcon={true} size="sm" />;
-    }
-  };
-
-  const renderAuditItem = ({ item }: any) => (
-    <TouchableOpacity 
-      style={styles.auditItem}
-      onPress={() => setSelectedAudit(item)}
-    >
-      <View style={styles.auditHeader}>
-        <Text style={styles.auditId}>{item.id}</Text>
-        <Text style={styles.auditTime}>{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
-      </View>
-      
-      <View style={styles.auditContent}>
-        <View style={styles.auditTypeContainer}>
-          <Feather 
-            name={
-              item.eventType.includes('BLOCK') ? 'x-circle' :
-              item.eventType.includes('ALLOW') ? 'check-circle' :
-              item.eventType.includes('REVIEW') ? 'alert-triangle' :
-              'info'
-            } 
-            size={20} 
-            color={
-              item.eventType.includes('BLOCK') ? COLORS.danger :
-              item.eventType.includes('ALLOW') ? COLORS.success :
-              item.eventType.includes('REVIEW') ? COLORS.warning :
-              COLORS.info
-            } 
-          />
-          <Text style={styles.auditType}>{item.eventType.replace('_', ' ')}</Text>
-        </View>
-        
-        <View style={styles.auditStatusContainer}>
-          <Text style={[
-            styles.auditDecision, 
-            { 
-              color: 
-                item.decision === 'BLOCK' ? COLORS.danger :
-                item.decision === 'ALLOW' ? COLORS.success :
-                item.decision === 'REVIEW' ? COLORS.warning :
-                COLORS.text
-            }
-          ]}>
-            {item.decision}
-          </Text>
-          {getIntegrityBadge(item.integrityStatus)}
-        </View>
-      </View>
-      
-      <View style={styles.auditDetails}>
-        <Text style={styles.auditDescription}>
-          {item.eventDetails.reason || `Processed ${item.eventType.replace('_', ' ').toLowerCase()}`}
-        </Text>
-        <Text style={styles.auditRisk}>Risk: {item.riskScore}/100</Text>
-      </View>
-    </TouchableOpacity>
-  );
+// Integrity badge — shows VERIFIED / TAMPER DETECTED / PENDING
+// using direct colors rather than RiskBadge (which shows "Low Risk"/"Critical"
+// — confusing in an audit officer context)
+const IntegrityBadge = ({ status }: { status: string }) => {
+  const isTampered = status === 'TAMPER_DETECTED';
+  const isPending = status === 'PENDING';
+  const color = isTampered ? COLORS.danger : isPending ? COLORS.caution : COLORS.success;
+  const bg = isTampered ? COLORS.dangerLight : isPending ? COLORS.cautionLight : COLORS.success + '15';
+  const icon = isTampered ? 'alert-triangle' : isPending ? 'clock' : 'check-circle';
+  const label = isTampered ? 'Tampered' : isPending ? 'Pending' : 'Verified';
 
   return (
-    <ScrollView 
-      style={styles.container} 
-      contentContainerStyle={styles.contentContainer}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={COLORS.primary} />
-      }
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity>
-          <Feather name="arrow-left" size={24} color={COLORS.text} />
-        </TouchableOpacity>
-        <Text style={styles.title}>Audit Dashboard</Text>
-        <TouchableOpacity>
-          <Feather name="filter" size={24} color={COLORS.text} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Summary Cards */}
-      <View style={styles.summaryContainer}>
-        <Card style={styles.summaryCard}>
-          <Feather name="activity" size={24} color={COLORS.primary} />
-          <Text style={styles.summaryValue}>142</Text>
-          <Text style={styles.summaryLabel}>Total Events</Text>
-        </Card>
-        
-        <Card style={styles.summaryCard}>
-          <Feather name="shield-check" size={24} color={COLORS.success} />
-          <Text style={styles.summaryValue}>140</Text>
-          <Text style={styles.summaryLabel}>Verified</Text>
-        </Card>
-        
-        <Card style={styles.summaryCard}>
-          <Feather name="alert-triangle" size={24} color={COLORS.danger} />
-          <Text style={styles.summaryValue}>2</Text>
-          <Text style={styles.summaryLabel}>Tamper Attempts</Text>
-        </Card>
-      </View>
-
-      {/* Integrity Status */}
-      <Card style={styles.integrityCard}>
-        <View style={styles.integrityHeader}>
-          <Feather name="lock" size={20} color={COLORS.success} />
-          <Text style={styles.integrityTitle}>Integrity Status</Text>
-        </View>
-        <Text style={styles.integrityDescription}>
-          All audit logs are secured with distributed verification. Any unauthorized modification is immediately detected and recovered.
-        </Text>
-        <View style={styles.integrityStats}>
-          <View style={styles.integrityStat}>
-            <Text style={styles.statValue}>3</Text>
-            <Text style={styles.statLabel}>Replicas</Text>
-          </View>
-          <View style={styles.integrityStat}>
-            <Text style={styles.statValue}>100%</Text>
-            <Text style={styles.statLabel}>Availability</Text>
-          </View>
-          <View style={styles.integrityStat}>
-            <Text style={styles.statValue}>99.9%</Text>
-            <Text style={styles.statLabel}>Integrity</Text>
-          </View>
-        </View>
-      </Card>
-
-      {/* Hash Chain Visualization */}
-      <Card style={styles.hashChainCard}>
-        <Text style={styles.sectionTitle}>Hash Chain Verification</Text>
-        <HashChainVisual 
-          hashes={['ABC123', 'XYZ789', 'JKL345', 'PQR901']}
-          currentHash="VWX567"
-          verifiedIndex={3}
-        />
-      </Card>
-
-      {/* Audit Logs */}
-      <Card style={styles.logsCard}>
-        <View style={styles.logsHeader}>
-          <Text style={styles.sectionTitle}>Recent Audit Events</Text>
-          <TouchableOpacity>
-            <Text style={styles.viewAllText}>View All</Text>
-          </TouchableOpacity>
-        </View>
-        
-        <FlatList
-          data={auditLogs}
-          renderItem={renderAuditItem}
-          keyExtractor={(item) => item.id}
-          showsVerticalScrollIndicator={false}
-        />
-      </Card>
-
-      {/* Selected Audit Detail Modal */}
-      {selectedAudit && (
-        <View style={styles.modalOverlay}>
-          <Card style={styles.detailModal}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Audit Event Details</Text>
-              <TouchableOpacity onPress={() => setSelectedAudit(null)}>
-                <Feather name="x" size={24} color={COLORS.text} />
-              </TouchableOpacity>
-            </View>
-            
-            <ScrollView style={styles.modalContent}>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Event ID</Text>
-                <Text style={styles.detailValue}>{selectedAudit.id}</Text>
-              </View>
-              
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Timestamp</Text>
-                <Text style={styles.detailValue}>{new Date(selectedAudit.timestamp).toLocaleString()}</Text>
-              </View>
-              
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>User ID</Text>
-                <Text style={styles.detailValue}>{selectedAudit.userId}</Text>
-              </View>
-              
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Event Type</Text>
-                <Text style={styles.detailValue}>{selectedAudit.eventType}</Text>
-              </View>
-              
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Decision</Text>
-                <Text style={[
-                  styles.detailValue,
-                  { 
-                    color: 
-                      selectedAudit.decision === 'BLOCK' ? COLORS.danger :
-                      selectedAudit.decision === 'ALLOW' ? COLORS.success :
-                      selectedAudit.decision === 'REVIEW' ? COLORS.warning :
-                      COLORS.text
-                  }
-                ]}>
-                  {selectedAudit.decision}
-                </Text>
-              </View>
-              
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Risk Score</Text>
-                <Text style={styles.detailValue}>{selectedAudit.riskScore}/100</Text>
-              </View>
-              
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Integrity Status</Text>
-                <Text style={[
-                  styles.detailValue,
-                  { color: getIntegrityColor(selectedAudit.integrityStatus) }
-                ]}>
-                  {selectedAudit.integrityStatus}
-                </Text>
-              </View>
-              
-              <View style={styles.detailSection}>
-                <Text style={styles.detailSectionTitle}>Event Details</Text>
-                <Text style={styles.detailSectionContent}>
-                  {JSON.stringify(selectedAudit.eventDetails, null, 2)}
-                </Text>
-              </View>
-              
-              <View style={styles.detailSection}>
-                <Text style={styles.detailSectionTitle}>Replica Verification</Text>
-                <View style={styles.replicaGrid}>
-                  <View style={styles.replicaItem}>
-                    <Text style={styles.replicaLabel}>Master:</Text>
-                    <Text style={[
-                      styles.replicaValue,
-                      { color: selectedAudit.replicaVerification.master === 'VERIFIED' ? COLORS.success : COLORS.danger }
-                    ]}>
-                      {selectedAudit.replicaVerification.master}
-                    </Text>
-                  </View>
-                  <View style={styles.replicaItem}>
-                    <Text style={styles.replicaLabel}>Replica A:</Text>
-                    <Text style={[
-                      styles.replicaValue,
-                      { color: selectedAudit.replicaVerification.replicaA === 'VERIFIED' ? COLORS.success : COLORS.danger }
-                    ]}>
-                      {selectedAudit.replicaVerification.replicaA}
-                    </Text>
-                  </View>
-                  <View style={styles.replicaItem}>
-                    <Text style={styles.replicaLabel}>Replica B:</Text>
-                    <Text style={[
-                      styles.replicaValue,
-                      { color: selectedAudit.replicaVerification.replicaB === 'VERIFIED' ? COLORS.success : COLORS.danger }
-                    ]}>
-                      {selectedAudit.replicaVerification.replicaB}
-                    </Text>
-                  </View>
-                  <View style={styles.replicaItem}>
-                    <Text style={styles.replicaLabel}>Replica C:</Text>
-                    <Text style={[
-                      styles.replicaValue,
-                      { color: selectedAudit.replicaVerification.replicaC === 'VERIFIED' ? COLORS.success : COLORS.danger }
-                    ]}>
-                      {selectedAudit.replicaVerification.replicaC}
-                    </Text>
-                  </View>
-                </View>
-                
-                {selectedAudit.replicaVerification.recoveryEvent && (
-                  <View style={styles.recoveryAlert}>
-                    <Feather name="alert-triangle" size={16} color={COLORS.danger} />
-                    <Text style={styles.recoveryText}>
-                      Recovery Event: Modified record restored from {selectedAudit.replicaVerification.recoveryEvent.restoredFrom}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            </ScrollView>
-          </Card>
-        </View>
-      )}
-
-      {/* Security Features */}
-      <Card style={styles.featuresCard}>
-        <Text style={styles.featuresTitle}>Security Features</Text>
-        <View style={styles.featureList}>
-          <View style={styles.featureItem}>
-            <Feather name="hash" size={20} color={COLORS.primary} />
-            <Text style={styles.featureText}>Hash Chain Verification</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Feather name="key" size={20} color={COLORS.primary} />
-            <Text style={styles.featureText}>Ed25519 Digital Signatures</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Feather name="database" size={20} color={COLORS.primary} />
-            <Text style={styles.featureText}>Distributed Replica Verification</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Feather name="refresh-ccw" size={20} color={COLORS.primary} />
-            <Text style={styles.featureText}>Automatic Recovery System</Text>
-          </View>
-        </View>
-      </Card>
-    </ScrollView>
+    <View style={[styles.integrityBadge, { backgroundColor: bg }]}>
+      <Feather name={icon as any} size={11} color={color} />
+      <Text style={[styles.integrityBadgeText, { color }]}>{label}</Text>
+    </View>
   );
 };
 
+// ── Main Screen ───────────────────────────────────────────────────────────────
+const AuditDashboardScreen = () => {
+  const insets = useSafeAreaInsets();
+  const [refreshing, setRefreshing] = useState(false);
+  const [selectedAudit, setSelectedAudit] = useState<typeof auditLogsData[0] | null>(null);
+  const [filterDecision, setFilterDecision] = useState<string>('ALL');
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await new Promise((r) => setTimeout(r, 1200));
+    setRefreshing(false);
+  };
+
+  // Summary counts
+  const totalEvents = auditLogsData.length;
+  const verifiedCount = auditLogsData.filter((l) => l.integrityStatus === 'VERIFIED').length;
+  const tamperCount = auditLogsData.filter((l) => l.integrityStatus === 'TAMPER_DETECTED').length;
+
+  // Filtered logs
+  const filters = ['ALL', 'ALLOW', 'BLOCK', 'TAMPER_DETECTED'];
+  const filteredLogs =
+    filterDecision === 'ALL'
+      ? auditLogsData
+      : auditLogsData.filter((l) => l.decision === filterDecision);
+
+  // Hash chain data from audit logs (most recent first -> reverse for chain order)
+  const chainHashes = [...auditLogsData]
+    .reverse()
+    .map((l) => l.currentHash);
+
+  // Find tampered index in the chain
+  const tamperedChainIndex = [...auditLogsData]
+    .reverse()
+    .findIndex((l) => l.integrityStatus === 'TAMPER_DETECTED');
+
+  // Build replica statuses from the first tampered record (for demo)
+  const tamperedRecord = auditLogsData.find((l) => l.integrityStatus === 'TAMPER_DETECTED');
+  const replicaStatuses: ReplicaStatus[] = tamperedRecord
+    ? [
+        { name: 'Replica A', matches: tamperedRecord.replicaVerification.replicaA === 'VERIFIED' },
+        { name: 'Replica B', matches: tamperedRecord.replicaVerification.replicaB === 'VERIFIED' },
+        { name: 'Replica C', matches: tamperedRecord.replicaVerification.replicaC === 'VERIFIED' },
+      ]
+    : [];
+
+  return (
+    <>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + SPACING.xl }]}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={COLORS.primary} />
+        }
+      >
+        {/* ── Summary row ── */}
+        <View style={styles.summaryRow}>
+          {[
+            { icon: 'activity', label: 'Total Events', value: totalEvents, color: COLORS.primary },
+            { icon: 'check-circle', label: 'Verified', value: verifiedCount, color: COLORS.success },
+            { icon: 'alert-triangle', label: 'Tamper Attempts', value: tamperCount, color: COLORS.danger },
+          ].map((item) => (
+            <View key={item.label} style={styles.summaryCard}>
+              <Feather name={item.icon as any} size={20} color={item.color} />
+              <Text style={[styles.summaryValue, { color: item.color }]}>{item.value}</Text>
+              <Text style={styles.summaryLabel}>{item.label}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* ── Integrity status card ── */}
+        <Card style={styles.integrityCard} padding="lg">
+          <View style={styles.integrityHeaderRow}>
+            <View style={styles.integrityIconWrap}>
+              <Feather name="lock" size={16} color={COLORS.success} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.integrityTitle}>Distributed Audit Ledger</Text>
+              <Text style={styles.integritySubtitle}>
+                Ed25519 signed · Hash chained · 3 replicas
+              </Text>
+            </View>
+            <View style={[styles.integrityBadge, { backgroundColor: COLORS.success + '15' }]}>
+              <Feather name="check-circle" size={11} color={COLORS.success} />
+              <Text style={[styles.integrityBadgeText, { color: COLORS.success }]}>Active</Text>
+            </View>
+          </View>
+
+          <View style={styles.integrityStatsRow}>
+            {[
+              { label: 'Replicas', value: '3' },
+              { label: 'Availability', value: '100%' },
+              { label: 'Integrity', value: `${Math.round((verifiedCount / totalEvents) * 100)}%` },
+            ].map((s) => (
+              <View key={s.label} style={styles.integrityStat}>
+                <Text style={styles.integrityStatValue}>{s.value}</Text>
+                <Text style={styles.integrityStatLabel}>{s.label}</Text>
+              </View>
+            ))}
+          </View>
+        </Card>
+
+        {/* ── Hash chain visual ── */}
+        <Card style={styles.section} padding="lg">
+          <Text style={styles.sectionTitle}>Hash Chain Verification</Text>
+          <HashChainVisual
+            hashes={chainHashes}
+            verifiedIndex={tamperedChainIndex >= 0 ? tamperedChainIndex - 1 : chainHashes.length - 1}
+            tamperedIndex={tamperedChainIndex}
+            replicaStatuses={replicaStatuses}
+          />
+        </Card>
+
+        {/* ── Filter chips ── */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterRow}
+        >
+          {filters.map((f) => (
+            <TouchableOpacity
+              key={f}
+              style={[styles.filterChip, filterDecision === f && styles.filterChipActive]}
+              onPress={() => setFilterDecision(f)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.filterChipText, filterDecision === f && styles.filterChipTextActive]}>
+                {f.replace('_', ' ')}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* ── Audit log list ── */}
+        <Card style={styles.section} padding="lg">
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>Audit Events</Text>
+            <Text style={styles.sectionCount}>{filteredLogs.length} records</Text>
+          </View>
+
+          {filteredLogs.map((log) => (
+            <TouchableOpacity
+              key={log.auditId}
+              style={styles.logRow}
+              onPress={() => setSelectedAudit(log)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.logIconWrap}>
+                <Feather
+                  name={decisionIcon(log.decision) as any}
+                  size={18}
+                  color={decisionColor(log.decision)}
+                />
+              </View>
+              <View style={styles.logContent}>
+                <View style={styles.logTopRow}>
+                  <Text style={styles.logId}>{log.auditId}</Text>
+                  <Text style={styles.logTime}>
+                    {new Date(log.timestamp).toLocaleTimeString('en-IN', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      hour12: true,
+                    })}
+                  </Text>
+                </View>
+                <Text style={styles.logEventType}>
+                  {log.eventType.replace(/_/g, ' ')}
+                </Text>
+                <View style={styles.logBottomRow}>
+                  <Text style={[styles.logDecision, { color: decisionColor(log.decision) }]}>
+                    {log.decision.replace('_', ' ')}
+                  </Text>
+                  <Text style={styles.logRisk}>Risk: {log.riskScore}/100</Text>
+                  <IntegrityBadge status={log.integrityStatus} />
+                </View>
+              </View>
+              <Feather name="chevron-right" size={16} color={COLORS.textTertiary} />
+            </TouchableOpacity>
+          ))}
+        </Card>
+
+        {/* ── Security features ── */}
+        <Card style={styles.section} padding="lg">
+          <Text style={styles.sectionTitle}>Audit Architecture</Text>
+          {[
+            { icon: 'hash', text: 'SHA-256 hash chaining — any modification breaks the chain' },
+            { icon: 'key', text: 'Ed25519 digital signatures — only Audit Service holds the private key' },
+            { icon: 'database', text: '3 distributed replicas — majority consensus detects tampering' },
+            { icon: 'refresh-cw', text: 'Automatic recovery — corrupted records restored from replicas' },
+          ].map((item, i) => (
+            <View key={i} style={styles.featureRow}>
+              <View style={styles.featureIconWrap}>
+                <Feather name={item.icon as any} size={15} color={COLORS.primary} />
+              </View>
+              <Text style={styles.featureText}>{item.text}</Text>
+            </View>
+          ))}
+        </Card>
+      </ScrollView>
+
+      {/* ── Detail Modal ── */}
+      <Modal
+        visible={!!selectedAudit}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setSelectedAudit(null)}
+      >
+        {selectedAudit && (
+          <View style={styles.modalRoot}>
+            {/* Modal header */}
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Audit Record</Text>
+              <TouchableOpacity
+                onPress={() => setSelectedAudit(null)}
+                style={styles.modalCloseBtn}
+                hitSlop={8}
+              >
+                <Feather name="x" size={22} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              contentContainerStyle={styles.modalScroll}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Decision banner */}
+              <View
+                style={[
+                  styles.decisionBanner,
+                  { backgroundColor: decisionColor(selectedAudit.decision) + '15' },
+                ]}
+              >
+                <Feather
+                  name={decisionIcon(selectedAudit.decision) as any}
+                  size={24}
+                  color={decisionColor(selectedAudit.decision)}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.decisionBannerTitle, { color: decisionColor(selectedAudit.decision) }]}>
+                    {selectedAudit.decision.replace(/_/g, ' ')}
+                  </Text>
+                  <Text style={styles.decisionBannerSub}>{formatTime(selectedAudit.timestamp)}</Text>
+                </View>
+                <IntegrityBadge status={selectedAudit.integrityStatus} />
+              </View>
+
+              {/* Core fields */}
+              <Card padding="lg" style={styles.detailCard}>
+                <Text style={styles.detailCardTitle}>Event Details</Text>
+                {[
+                  { label: 'Audit ID', value: selectedAudit.auditId },
+                  { label: 'User ID', value: selectedAudit.userId },
+                  { label: 'Event Type', value: selectedAudit.eventType.replace(/_/g, ' ') },
+                  { label: 'Risk Score', value: `${selectedAudit.riskScore} / 100` },
+                  { label: 'Timestamp', value: formatTime(selectedAudit.timestamp) },
+                ].map((row) => (
+                  <View key={row.label} style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>{row.label}</Text>
+                    <Text style={styles.detailValue}>{row.value}</Text>
+                  </View>
+                ))}
+              </Card>
+
+              {/* Event context */}
+              <Card padding="lg" style={styles.detailCard}>
+                <Text style={styles.detailCardTitle}>Context</Text>
+                {Object.entries(selectedAudit.eventDetails).map(([k, v]) => (
+                  <View key={k} style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>{k.replace(/([A-Z])/g, ' $1').trim()}</Text>
+                    <Text style={styles.detailValue}>{String(v)}</Text>
+                  </View>
+                ))}
+              </Card>
+
+              {/* Hash chain */}
+              <Card padding="lg" style={styles.detailCard}>
+                <Text style={styles.detailCardTitle}>Cryptographic Record</Text>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Previous Hash</Text>
+                  <Text style={styles.hashValue}>{selectedAudit.previousHash}</Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Current Hash</Text>
+                  <Text style={styles.hashValue}>{selectedAudit.currentHash}</Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Signature</Text>
+                  <Text style={styles.hashValue}>{selectedAudit.signature}</Text>
+                </View>
+              </Card>
+
+              {/* Replica verification */}
+              <Card padding="lg" style={styles.detailCard}>
+                <Text style={styles.detailCardTitle}>Replica Verification</Text>
+                {[
+                  { label: 'Master', value: selectedAudit.replicaVerification.master },
+                  { label: 'Replica A', value: selectedAudit.replicaVerification.replicaA },
+                  { label: 'Replica B', value: selectedAudit.replicaVerification.replicaB },
+                  { label: 'Replica C', value: selectedAudit.replicaVerification.replicaC },
+                ].map((r) => (
+                  <View key={r.label} style={styles.replicaRow}>
+                    <Text style={styles.detailLabel}>{r.label}</Text>
+                    <View style={styles.replicaStatusWrap}>
+                      <Feather
+                        name={r.value === 'VERIFIED' ? 'check-circle' : 'x-circle'}
+                        size={14}
+                        color={r.value === 'VERIFIED' ? COLORS.success : COLORS.danger}
+                      />
+                      <Text
+                        style={[
+                          styles.replicaStatusText,
+                          { color: r.value === 'VERIFIED' ? COLORS.success : COLORS.danger },
+                        ]}
+                      >
+                        {r.value}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+
+                {/* Recovery event if present */}
+                {'recoveryEvent' in selectedAudit.replicaVerification &&
+                  selectedAudit.replicaVerification.recoveryEvent && (
+                    <View style={styles.recoveryBanner}>
+                      <Feather name="refresh-cw" size={14} color={COLORS.danger} />
+                      <Text style={styles.recoveryText}>
+                        Tamper detected — record automatically restored from{' '}
+                        {(selectedAudit.replicaVerification.recoveryEvent as any).restoredFrom} at{' '}
+                        {formatTime((selectedAudit.replicaVerification.recoveryEvent as any).timestamp)}
+                      </Text>
+                    </View>
+                  )}
+              </Card>
+
+              <View style={{ height: SPACING.xxl }} />
+            </ScrollView>
+          </View>
+        )}
+      </Modal>
+    </>
+  );
+};
+
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
   },
-  contentContainer: {
+  scrollContent: {
     padding: SPACING.lg,
-    paddingBottom: SPACING.xxl,
   },
-  header: {
+
+  // Summary
+  summaryRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: SPACING.xl,
-  },
-  title: {
-    ...TYPOGRAPHY.h3,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  summaryContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: SPACING.lg,
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
   },
   summaryCard: {
     flex: 1,
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.md,
     alignItems: 'center',
-    padding: SPACING.lg,
-    marginHorizontal: SPACING.xs,
+    gap: SPACING.xs,
+    ...SHADOWS.small,
   },
   summaryValue: {
-    ...TYPOGRAPHY.h2,
+    ...TYPOGRAPHY.h3,
     fontWeight: '700',
-    color: COLORS.primary,
-    marginVertical: SPACING.xs,
   },
   summaryLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+    textAlign: 'center',
   },
+
+  // Integrity card
   integrityCard: {
-    padding: SPACING.lg,
-    marginBottom: SPACING.lg,
+    marginBottom: SPACING.md,
   },
-  integrityHeader: {
+  integrityHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: SPACING.sm,
     marginBottom: SPACING.md,
+  },
+  integrityIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.success + '15',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   integrityTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
+    ...TYPOGRAPHY.bodySmMedium,
     color: COLORS.text,
-    marginLeft: SPACING.sm,
+    fontWeight: '700',
   },
-  integrityDescription: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.textSecondary,
-    marginBottom: SPACING.md,
+  integritySubtitle: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+    marginTop: 1,
   },
-  integrityStats: {
+  integrityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+  },
+  integrityBadgeText: {
+    ...TYPOGRAPHY.captionBold,
+  },
+  integrityStatsRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
+    paddingTop: SPACING.md,
   },
   integrityStat: {
     alignItems: 'center',
   },
-  statValue: {
-    ...TYPOGRAPHY.h3,
-    fontWeight: '700',
+  integrityStatValue: {
+    ...TYPOGRAPHY.h4,
     color: COLORS.primary,
+    fontWeight: '700',
   },
-  statLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-    marginTop: SPACING.xs,
+  integrityStatLabel: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+    marginTop: 2,
   },
-  hashChainCard: {
-    padding: SPACING.lg,
-    marginBottom: SPACING.lg,
+
+  // Generic section card
+  section: {
+    marginBottom: SPACING.md,
   },
   sectionTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
+    ...TYPOGRAPHY.bodySmMedium,
     color: COLORS.text,
+    fontWeight: '700',
     marginBottom: SPACING.md,
   },
-  logsCard: {
-    padding: SPACING.lg,
-    marginBottom: SPACING.lg,
-  },
-  logsHeader: {
+  sectionHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: SPACING.md,
   },
-  viewAllText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.primary,
-    fontWeight: '600',
-  },
-  auditItem: {
-    backgroundColor: COLORS.surface,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
-    marginBottom: SPACING.sm,
-    ...SHADOWS.small,
-  },
-  auditHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
-  },
-  auditId: {
-    ...TYPOGRAPHY.bodySm,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  auditTime: {
+  sectionCount: {
     ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+  },
+
+  // Filter chips
+  filterRow: {
+    gap: SPACING.sm,
+    paddingBottom: SPACING.md,
+  },
+  filterChip: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.surfaceLight,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  filterChipActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  filterChipText: {
+    ...TYPOGRAPHY.bodySmMedium,
     color: COLORS.textSecondary,
   },
-  auditContent: {
+  filterChipTextActive: {
+    color: COLORS.textOnDark,
+  },
+
+  // Log row
+  logRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.divider,
+  },
+  logIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: BORDER_RADIUS.md,
+    backgroundColor: COLORS.surfaceLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  logContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  logTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
+    marginBottom: 2,
   },
-  auditTypeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  logId: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.primary,
   },
-  auditType: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
+  logTime: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+  },
+  logEventType: {
+    ...TYPOGRAPHY.bodySm,
     color: COLORS.text,
-    marginLeft: SPACING.sm,
+    fontWeight: '600',
+    marginBottom: 4,
   },
-  auditStatusContainer: {
+  logBottomRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.sm,
   },
-  auditDecision: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
+  logDecision: {
+    ...TYPOGRAPHY.captionBold,
   },
-  auditDetails: {
+  logRisk: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+  },
+
+  // Feature rows
+  featureRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
   },
-  auditDescription: {
+  featureIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: BORDER_RADIUS.sm,
+    backgroundColor: COLORS.primaryVeryLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+    marginTop: 1,
+  },
+  featureText: {
     ...TYPOGRAPHY.bodySm,
     color: COLORS.textSecondary,
     flex: 1,
+    lineHeight: 19,
   },
-  auditRisk: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.textTertiary,
-    fontWeight: '600',
-  },
-  modalOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1000,
-  },
-  detailModal: {
-    width: '90%',
-    maxHeight: '80%',
-    padding: SPACING.lg,
+
+  // Detail modal
+  modalRoot: {
+    flex: 1,
+    backgroundColor: COLORS.background,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    backgroundColor: COLORS.surface,
   },
   modalTitle: {
     ...TYPOGRAPHY.h4,
-    fontWeight: '600',
     color: COLORS.text,
+    fontWeight: '700',
   },
-  modalContent: {
-    maxHeight: '70%',
+  modalCloseBtn: {
+    padding: SPACING.xs,
+  },
+  modalScroll: {
+    padding: SPACING.lg,
+  },
+  decisionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.lg,
+    marginBottom: SPACING.md,
+  },
+  decisionBannerTitle: {
+    ...TYPOGRAPHY.bodyMedium,
+    fontWeight: '700',
+  },
+  decisionBannerSub: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textSecondary,
+    marginTop: 1,
+  },
+  detailCard: {
+    marginBottom: SPACING.md,
+  },
+  detailCardTitle: {
+    ...TYPOGRAPHY.bodySmMedium,
+    color: COLORS.text,
+    fontWeight: '700',
+    marginBottom: SPACING.sm,
   },
   detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: SPACING.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    alignItems: 'flex-start',
+    paddingVertical: SPACING.xs,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
   },
   detailLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+    textTransform: 'capitalize',
     flex: 1,
   },
   detailValue: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
+    ...TYPOGRAPHY.bodySmMedium,
     color: COLORS.text,
+    fontWeight: '600',
+    flex: 1.5,
     textAlign: 'right',
   },
-  detailSection: {
-    marginTop: SPACING.lg,
-  },
-  detailSectionTitle: {
-    ...TYPOGRAPHY.bodySm,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.sm,
-  },
-  detailSectionContent: {
+  hashValue: {
     ...TYPOGRAPHY.caption,
-    color: COLORS.textSecondary,
+    color: COLORS.primary,
     fontFamily: 'monospace',
-    backgroundColor: COLORS.surfaceLight,
-    padding: SPACING.sm,
-    borderRadius: BORDER_RADIUS.sm,
+    flex: 1.5,
+    textAlign: 'right',
   },
-  replicaGrid: {
+  replicaRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: SPACING.md,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: SPACING.xs,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
   },
-  replicaItem: {
+  replicaStatusWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
-    minWidth: '45%',
+    gap: 4,
   },
-  replicaLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-    marginRight: SPACING.xs,
+  replicaStatusText: {
+    ...TYPOGRAPHY.captionBold,
   },
-  replicaValue: {
-    ...TYPOGRAPHY.bodySm,
-    fontWeight: '600',
-  },
-  recoveryAlert: {
+  recoveryBanner: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.danger + '10',
-    padding: SPACING.md,
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+    backgroundColor: COLORS.dangerLight,
     borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md,
     marginTop: SPACING.md,
   },
   recoveryText: {
     ...TYPOGRAPHY.bodySm,
     color: COLORS.danger,
-    marginLeft: SPACING.sm,
-  },
-  featuresCard: {
-    padding: SPACING.lg,
-  },
-  featuresTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.md,
-  },
-  featureList: {
-    gap: SPACING.sm,
-  },
-  featureItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.surface,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
-    ...SHADOWS.small,
-  },
-  featureText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.text,
-    marginLeft: SPACING.sm,
+    flex: 1,
+    lineHeight: 19,
   },
 });
 

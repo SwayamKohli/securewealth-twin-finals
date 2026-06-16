@@ -1,413 +1,328 @@
 // src/screens/TransactionResultScreen.tsx
-import React from 'react';
+// SecureWealth Twin — Payment Receipt
+//
+// Final screen after SecurityReview. Receives { transactionData, assessment }.
+//
+// Decision -> receipt title mapping:
+//   ALLOW     -> "Payment Successful"
+//   WARN      -> "Payment Sent"             (still successful, just flagged)
+//   CHALLENGE -> "Payment Verified & Sent"
+//   BLOCK     -> "Payment Stopped"          (defensive fallback — SecurityReview
+//                                             normally terminates BLOCK before
+//                                             reaching this screen)
+//
+// "Done" navigates back to Home (resets the Send stack first so the next visit
+// to Send Money starts fresh). "Send Another" just resets the Send stack.
+
+import React, { useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { COLORS } from '../constants/colors';
-import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
-import Card from '../components/common/Card';
-import RiskBadge from '../components/common/RiskBadge';
+import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS, DECISION_STYLES } from '../constants/theme';
+import { generateReferenceId } from '../utils/riskSimulator';
 
-const TransactionResultScreen = () => {
-  // Mock transaction data
-  const transactionResult = {
-    decision: 'BLOCK' as const, // Options: ALLOW, WARN, REVIEW, BLOCK
-    riskLevel: 'CRITICAL' as const,
-    amount: 50000,
-    fromAccount: '****1234',
-    toAccount: '****5678',
-    merchant: 'XYZ Company',
-    timestamp: '2026-06-12T01:04:22Z',
-    reason: 'Multiple suspicious signals detected',
-    signals: [
-      'New device detected',
-      'Late-night transaction',
-      'Fast OTP entry',
-      'Amount spike detected'
-    ],
-    confidence: 98,
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const formatCurrency = (n: number) => '\u20B9' + n.toLocaleString('en-IN');
+
+const formatDateTime = (iso: string) =>
+  new Date(iso).toLocaleString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+// Decision -> receipt copy (distinct from SecurityReview's DECISION_STYLES titles,
+// since this screen frames everything as "completed", not "in review")
+const RECEIPT_COPY: Record<string, { title: string; subtitle: string }> = {
+  ALLOW: {
+    title: 'Payment Successful',
+    subtitle: 'Your money is on its way.',
+  },
+  WARN: {
+    title: 'Payment Sent',
+    subtitle: 'Your payment went through. We flagged it for your awareness — no action needed.',
+  },
+  CHALLENGE: {
+    title: 'Payment Verified & Sent',
+    subtitle: 'Thanks for confirming — your money is on its way.',
+  },
+  BLOCK: {
+    title: 'Payment Stopped',
+    subtitle: 'This payment did not go through. Your account is safe.',
+  },
+};
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+const DetailRow = ({
+  label,
+  value,
+  emphasize,
+}: {
+  label: string;
+  value: string;
+  emphasize?: boolean;
+}) => (
+  <View style={styles.detailRow}>
+    <Text style={styles.detailLabel}>{label}</Text>
+    <Text style={[styles.detailValue, emphasize && styles.detailValueEmphasis]} numberOfLines={1}>
+      {value}
+    </Text>
+  </View>
+);
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+const TransactionResultScreen = ({ route, navigation }: any) => {
+  const { transactionData, assessment } = route.params;
+  const insets = useSafeAreaInsets();
+
+  // Stable reference ID for this receipt (generated once)
+  const referenceId = useRef(generateReferenceId()).current;
+  const completedAt = useRef(new Date().toISOString()).current;
+
+  const decision = assessment.decision as 'ALLOW' | 'WARN' | 'CHALLENGE' | 'BLOCK';
+  const decisionStyle = DECISION_STYLES[decision];
+  const receipt = RECEIPT_COPY[decision];
+
+  const isSuccess = decision !== 'BLOCK';
+
+  // ── Navigation actions ──────────────────────────────────────────────────────
+  const handleDone = () => {
+    navigation.popToTop();
+    navigation.getParent()?.navigate('HomeTab');
   };
 
-  const getDecisionColors = () => {
-    switch (transactionResult.decision) {
-      case 'ALLOW':
-        return { bg: COLORS.success + '20', text: COLORS.success, icon: 'check-circle' };
-      case 'WARN':
-        return { bg: COLORS.warning + '20', text: COLORS.warning, icon: 'alert-circle' };
-      case 'REVIEW':
-        return { bg: COLORS.warning + '20', text: COLORS.warning, icon: 'alert-triangle' };
-      case 'BLOCK':
-        return { bg: COLORS.danger + '20', text: COLORS.danger, icon: 'x-circle' };
-      default:
-        return { bg: COLORS.text + '20', text: COLORS.text, icon: 'info' };
-    }
-  };
-
-  const decisionColors = getDecisionColors();
-
-  const handleNewTransaction = () => {
-    console.log('Starting new transaction...');
-    // Navigate to transaction initiate screen
-  };
-
-  const handleViewHistory = () => {
-    console.log('Viewing transaction history...');
-    // Navigate to transaction history screen
+  const handleSendAnother = () => {
+    navigation.popToTop();
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity>
-          <Feather name="arrow-left" size={24} color={COLORS.text} />
-        </TouchableOpacity>
-        <Text style={styles.title}>Transaction Result</Text>
-        <View style={{ width: 24 }} /> {/* Spacer */}
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Status header */}
+      <View style={styles.statusHeader}>
+        <View
+          style={[
+            styles.statusIconWrap,
+            { backgroundColor: decisionStyle.bgColor, borderColor: decisionStyle.borderColor },
+          ]}
+        >
+          <Feather name={isSuccess ? 'check' : 'x'} size={44} color={decisionStyle.color} />
+        </View>
+        <Text style={[styles.statusTitle, { color: decisionStyle.color }]}>{receipt.title}</Text>
+        <Text style={styles.statusSubtitle}>{receipt.subtitle}</Text>
+
+        {isSuccess && (
+          <Text style={styles.amountDisplay}>{formatCurrency(transactionData.amount)}</Text>
+        )}
       </View>
 
-      {/* Result Card */}
-      <Card style={styles.resultCard}>
-        <View style={[
-          styles.resultIconContainer,
-          { backgroundColor: decisionColors.bg }
-        ]}>
-          <Feather name={decisionColors.icon as any} size={48} color={decisionColors.text} />
-        </View>
-        
-        <Text style={[
-          styles.resultTitle,
-          { color: decisionColors.text }
-        ]}>
-          {transactionResult.decision === 'ALLOW' ? 'Transaction Successful' :
-           transactionResult.decision === 'WARN' ? 'Transaction Processed with Warning' :
-           transactionResult.decision === 'REVIEW' ? 'Additional Verification Required' :
-           'Transaction Blocked'}
-        </Text>
-        
-        <Text style={styles.resultMessage}>
-          {transactionResult.decision === 'ALLOW' ? 'Your transaction was processed successfully.' :
-           transactionResult.decision === 'WARN' ? 'Your transaction was processed but flagged for review.' :
-           transactionResult.decision === 'REVIEW' ? 'Additional verification is required to complete this transaction.' :
-           'Your transaction was blocked for security reasons.'}
-        </Text>
-
-        {/* Risk Level */}
-        <View style={styles.riskLevelContainer}>
-          <Text style={styles.riskLabel}>Risk Level:</Text>
-          <RiskBadge level={transactionResult.riskLevel} showIcon={true} size="md" />
-        </View>
-      </Card>
-
-      {/* Transaction Details */}
-      <Card style={styles.detailsCard}>
-        <Text style={styles.sectionTitle}>Transaction Details</Text>
-        
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Amount</Text>
-          <Text style={styles.detailValue}>₹{transactionResult.amount.toLocaleString()}</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>From Account</Text>
-          <Text style={styles.detailValue}>{transactionResult.fromAccount}</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>To Account</Text>
-          <Text style={styles.detailValue}>{transactionResult.toAccount}</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Time</Text>
-          <Text style={styles.detailValue}>01:04 AM, Today</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Status</Text>
-          <Text style={[styles.detailValue, { color: decisionColors.text, fontWeight: '600' }]}>
-            {transactionResult.decision}
-          </Text>
-        </View>
-      </Card>
-
-      {/* Security Analysis */}
-      {transactionResult.signals && transactionResult.signals.length > 0 && (
-        <Card style={styles.analysisCard}>
-          <Text style={styles.sectionTitle}>Security Analysis</Text>
-          
-          <View style={styles.analysisItem}>
-            <Feather name="shield" size={16} color={COLORS.text} />
-            <Text style={styles.analysisText}>
-              Risk Score: {transactionResult.confidence}/100
+      {/* Receipt card */}
+      <View style={styles.card}>
+        <View style={styles.cardHeaderRow}>
+          <Text style={styles.cardTitle}>Payment Details</Text>
+          <View style={[styles.statusBadge, { backgroundColor: decisionStyle.bgColor }]}>
+            <Text style={[styles.statusBadgeText, { color: decisionStyle.color }]}>
+              {isSuccess ? 'Completed' : 'Stopped'}
             </Text>
           </View>
-          
-          <View style={styles.analysisItem}>
-            <Feather name="alert-triangle" size={16} color={COLORS.danger} />
-            <Text style={styles.analysisText}>
-              Reason: {transactionResult.reason}
-            </Text>
-          </View>
-          
-          <View style={styles.signalsContainer}>
-            <Text style={styles.signalsLabel}>Detected Signals:</Text>
-            {transactionResult.signals.map((signal, index) => (
-              <View key={index} style={styles.signalItem}>
-                <Feather name="x" size={12} color={COLORS.danger} />
-                <Text style={styles.signalText}>{signal}</Text>
-              </View>
-            ))}
-          </View>
-        </Card>
-      )}
+        </View>
 
-      {/* Action Buttons */}
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity 
-          style={styles.primaryButton}
-          onPress={handleNewTransaction}
-        >
-          <Feather name="plus" size={20} color={COLORS.textOnDark} />
-          <Text style={styles.primaryButtonText}>New Transaction</Text>
+        <DetailRow label="Reference ID" value={referenceId} emphasize />
+        <DetailRow label="Amount" value={formatCurrency(transactionData.amount)} />
+        <DetailRow
+          label="To"
+          value={`${transactionData.toLabel} \u00B7 ${transactionData.toDetail}`}
+        />
+        <DetailRow
+          label="From"
+          value={`${transactionData.fromAccount.bankName} ${transactionData.fromAccount.masked}`}
+        />
+        <DetailRow label="Payment Mode" value={transactionData.paymentMode} />
+        <DetailRow label="Date & Time" value={formatDateTime(completedAt)} />
+        {transactionData.note ? <DetailRow label="Note" value={transactionData.note} /> : null}
+      </View>
+
+      {/* Trust footer */}
+      <View style={styles.trustFooter}>
+        <Feather name="shield" size={16} color={COLORS.success} />
+        <Text style={styles.trustFooterText}>
+          {isSuccess
+            ? 'Your money is protected. This transaction has been securely recorded for your records.'
+            : 'Your account is safe. This attempt has been securely recorded and our team has been notified.'}
+        </Text>
+      </View>
+
+      {/* Actions */}
+      <View style={styles.actions}>
+        <TouchableOpacity style={styles.primaryBtn} onPress={handleDone} activeOpacity={0.8}>
+          <Feather name="home" size={16} color={COLORS.textOnDark} />
+          <Text style={styles.primaryBtnText}>Done</Text>
         </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={styles.secondaryButton}
-          onPress={handleViewHistory}
+        <TouchableOpacity
+          style={styles.secondaryBtn}
+          onPress={handleSendAnother}
+          activeOpacity={0.8}
         >
-          <Feather name="history" size={20} color={COLORS.primary} />
-          <Text style={styles.secondaryButtonText}>View History</Text>
+          <Feather name="repeat" size={16} color={COLORS.primary} />
+          <Text style={styles.secondaryBtnText}>Send Another Payment</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Security Message */}
-      {transactionResult.decision === 'BLOCK' && (
-        <Card style={styles.securityCard}>
-          <View style={styles.securityHeader}>
-            <Feather name="shield" size={20} color={COLORS.success} />
-            <Text style={styles.securityTitle}>Account Security</Text>
-          </View>
-          <Text style={styles.securityMessage}>
-            Your account is safe. This transaction was stopped before any funds were transferred. 
-            We continuously monitor for suspicious activity to protect your finances.
-          </Text>
-        </Card>
-      )}
-
-      {/* Additional Info */}
-      <Card style={styles.infoCard}>
-        <Text style={styles.infoTitle}>Need Help?</Text>
-        <Text style={styles.infoText}>
-          If you believe this decision was made in error, please contact our security team 
-          or visit the nearest branch for assistance.
-        </Text>
-        <TouchableOpacity style={styles.contactButton}>
-          <Feather name="phone" size={16} color={COLORS.primary} />
-          <Text style={styles.contactText}>Contact Security Team</Text>
-        </TouchableOpacity>
-      </Card>
+      <View style={{ height: insets.bottom + SPACING.xl }} />
     </ScrollView>
   );
 };
 
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
   },
-  contentContainer: {
+  scrollContent: {
     padding: SPACING.lg,
-    paddingBottom: SPACING.xxl,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+
+  statusHeader: {
     alignItems: 'center',
-    marginBottom: SPACING.xl,
+    paddingTop: SPACING.xl,
+    paddingBottom: SPACING.lg,
   },
-  title: {
-    ...TYPOGRAPHY.h3,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  resultCard: {
-    alignItems: 'center',
-    padding: SPACING.xl,
-    marginBottom: SPACING.lg,
-  },
-  resultIconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+  statusIconWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: BORDER_RADIUS.full,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: SPACING.md,
+    borderWidth: 1.5,
+    marginBottom: SPACING.lg,
   },
-  resultTitle: {
+  statusTitle: {
     ...TYPOGRAPHY.h2,
     fontWeight: '700',
     textAlign: 'center',
-    marginBottom: SPACING.sm,
+    marginBottom: SPACING.xs,
   },
-  resultMessage: {
-    ...TYPOGRAPHY.body,
-    textAlign: 'center',
-    color: COLORS.textSecondary,
-    marginBottom: SPACING.lg,
-  },
-  riskLevelContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  riskLabel: {
+  statusSubtitle: {
     ...TYPOGRAPHY.bodySm,
     color: COLORS.textSecondary,
-    marginRight: SPACING.sm,
-  },
-  detailsCard: {
-    padding: SPACING.lg,
-    marginBottom: SPACING.lg,
-  },
-  sectionTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
-    color: COLORS.text,
+    textAlign: 'center',
+    paddingHorizontal: SPACING.lg,
     marginBottom: SPACING.md,
   },
+  amountDisplay: {
+    ...TYPOGRAPHY.display,
+    color: COLORS.text,
+    fontWeight: '700',
+    marginTop: SPACING.sm,
+  },
+
+  card: {
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.lg,
+    marginBottom: SPACING.md,
+    ...SHADOWS.small,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+  },
+  cardTitle: {
+    ...TYPOGRAPHY.bodySmMedium,
+    color: COLORS.text,
+    fontWeight: '700',
+  },
+  statusBadge: {
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+  },
+  statusBadgeText: {
+    ...TYPOGRAPHY.captionBold,
+  },
+
   detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: SPACING.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    paddingVertical: SPACING.xs,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
   },
   detailLabel: {
     ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
+    color: COLORS.textTertiary,
   },
   detailValue: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
+    ...TYPOGRAPHY.bodySmMedium,
     color: COLORS.text,
+    fontWeight: '600',
+    flexShrink: 1,
+    marginLeft: SPACING.md,
+    textAlign: 'right',
   },
-  analysisCard: {
-    padding: SPACING.lg,
+  detailValueEmphasis: {
+    color: COLORS.primary,
+    fontWeight: '700',
+  },
+
+  trustFooter: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+    backgroundColor: COLORS.primaryVeryLight,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.md,
     marginBottom: SPACING.lg,
   },
-  analysisItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.md,
-  },
-  analysisText: {
+  trustFooterText: {
     ...TYPOGRAPHY.bodySm,
-    color: COLORS.text,
-    marginLeft: SPACING.sm,
+    color: COLORS.primaryMedium,
+    flex: 1,
+    lineHeight: 19,
   },
-  signalsContainer: {
-    marginTop: SPACING.md,
-  },
-  signalsLabel: {
-    ...TYPOGRAPHY.bodySm,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.sm,
-  },
-  signalItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.surfaceLight,
-    padding: SPACING.sm,
-    borderRadius: BORDER_RADIUS.sm,
-    marginBottom: SPACING.xs,
-  },
-  signalText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.text,
-    marginLeft: SPACING.sm,
-  },
-  buttonContainer: {
+
+  actions: {
     gap: SPACING.sm,
-    marginBottom: SPACING.md,
   },
-  primaryButton: {
+  primaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.primary,
-    padding: SPACING.lg,
     borderRadius: BORDER_RADIUS.lg,
+    paddingVertical: SPACING.md,
+    gap: SPACING.sm,
   },
-  primaryButtonText: {
+  primaryBtnText: {
     ...TYPOGRAPHY.button,
     color: COLORS.textOnDark,
-    marginLeft: SPACING.sm,
   },
-  secondaryButton: {
+  secondaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.surface,
-    padding: SPACING.lg,
     borderRadius: BORDER_RADIUS.lg,
+    paddingVertical: SPACING.md,
+    gap: SPACING.sm,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  secondaryButtonText: {
+  secondaryBtnText: {
     ...TYPOGRAPHY.button,
     color: COLORS.primary,
-    marginLeft: SPACING.sm,
-  },
-  securityCard: {
-    padding: SPACING.lg,
-    marginBottom: SPACING.md,
-  },
-  securityHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.md,
-  },
-  securityTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginLeft: SPACING.sm,
-  },
-  securityMessage: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.text,
-    lineHeight: 20,
-  },
-  infoCard: {
-    padding: SPACING.lg,
-  },
-  infoTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.sm,
-  },
-  infoText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-    marginBottom: SPACING.md,
-    lineHeight: 18,
-  },
-  contactButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.surfaceLight,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
-  },
-  contactText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.primary,
-    fontWeight: '600',
-    marginLeft: SPACING.sm,
   },
 });
 

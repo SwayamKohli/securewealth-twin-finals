@@ -1,0 +1,25 @@
+[
+  {
+    "depositId": "DEP-001",
+    "userId": "USR-001",
+    "depositType": "FD",
+    "principal": 200000,
+    "currentValue": 210400,
+    "interestRate": 7.2,
+    "startDate": "2025-08-20",
+    "maturityDate": "2026-08-20",
+    "institution": "Punjab & Sind Bank"
+  },
+  {
+    "depositId": "DEP-002",
+    "userId": "USR-001",
+    "depositType": "RD",
+    "principal": 60000,
+    "currentValue": 63100,
+    "monthlyInstallment": 5000,
+    "interestRate": 6.5,
+    "startDate": "2025-10-14",
+    "maturityDate": "2026-10-14",
+    "institution": "Punjab & Sind Bank"
+  }
+]

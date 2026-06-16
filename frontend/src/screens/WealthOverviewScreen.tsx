@@ -1,577 +1,720 @@
 // src/screens/WealthOverviewScreen.tsx
+// SecureWealth Twin — My Wealth
+//
+// Strictly scoped to the blueprint's Finals MVP Wealth Intelligence Layer:
+//   - Net Worth Analysis        (Assets - Liabilities)
+//   - Cash Flow Analysis        (Income / Expenses / Savings)
+//   - Goal-Based Recommendations (Emergency Fund, FD, RD, SIP only)
+//   - Explainable Recommendations (Why / How sure / Expected benefit)
+//
+// Explicitly OUT of scope (per blueprint section 8 "Explicitly Out Of Scope"):
+//   Stock Picking, Tax Optimization, Mutual Fund Ranking, Insurance Advisory,
+//   Credit Card Recommendation Engine, Goal Tracking (house/education/retirement
+//   — goal_tracking table is a "Future Expansion Table, Not Finals").
+//
+// Layout (single scroll, no tabs — consistent with Dashboard's section pattern):
+//   1. Hero (green): Net Worth + Assets/Liabilities pills
+//   2. Cash Flow card: stacked bar (Income -> Expenses + Savings)
+//   3. My Deposits: FD/RD cards with maturity progress
+//   4. My Loans: EMI cards with repayment progress
+//   5. Smart Recommendations: Emergency Fund / FD / RD / SIP cards
+//
+// Terminology: "Confidence: 87%" is replaced with a friendly "How sure are we"
+// badge (Very likely to help / Likely to help / Worth considering). Banking
+// terms (FD, RD, SIP, EMI, Net Worth) keep their names but get a ? info icon
+// (placeholder Alert until GlossaryPopup is built in Batch 6).
+
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+
 import { COLORS } from '../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
-import Card from '../components/common/Card';
-import RiskBadge from '../components/common/RiskBadge';
+import GlossaryPopup from '../components/common/GlossaryPopup';
 
-const WealthOverviewScreen = () => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'recommendations' | 'goals'>('overview');
+import accountsData from '../../mockData/accounts.json';
+import depositsData from '../../mockData/deposits.json';
+import loansData from '../../mockData/loans.json';
+import transactionsData from '../../mockData/transactions.json';
+import recommendationsData from '../../mockData/recommendations.json';
 
-  // Mock wealth data
-  const wealthData = {
-    netWorth: 542500,
-    totalAssets: 650000,
-    totalLiabilities: 107500,
-    cashFlow: {
-      income: 75000,
-      expenses: 26250,
-      savings: 48750,
-    },
-  };
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const formatCurrency = (n: number) => '\u20B9' + Math.round(n).toLocaleString('en-IN');
 
-  const investmentAccounts = [
-    { id: '1', name: 'Savings Account', balance: 48750, type: 'Savings', growth: '+2.4%' },
-    { id: '2', name: 'Fixed Deposit', balance: 150000, type: 'FD', growth: '+7.5%' },
-    { id: '3', name: 'Mutual Funds', balance: 250000, type: 'MF', growth: '+12.3%' },
-    { id: '4', name: 'Retirement Fund', balance: 192500, type: 'RF', growth: '+8.7%' },
-  ];
+const daysUntil = (dateStr: string): number => {
+  const diff = new Date(dateStr).getTime() - Date.now();
+  return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+};
 
-  const recommendations = [
-    { 
-      id: '1', 
-      title: 'Emergency Fund', 
-      description: 'Build ₹1,50,000 emergency fund to cover 6 months of expenses', 
-      priority: 'HIGH' as const,
-      confidence: 94,
-      benefit: 'Avoid debt in emergencies',
-      reason: 'Your liquid savings cover only 1.2 months of expenses'
-    },
-    { 
-      id: '2', 
-      title: 'SIP Investment', 
-      description: 'Start ₹5,000 monthly SIP in index funds for long-term growth', 
-      priority: 'MEDIUM' as const,
-      confidence: 87,
-      benefit: 'Expected 12% annual returns',
-      reason: 'Your risk profile matches equity investment opportunities'
-    },
-    { 
-      id: '3', 
-      title: 'Insurance Review', 
-      description: 'Review life insurance coverage adequacy', 
-      priority: 'LOW' as const,
-      confidence: 78,
-      benefit: 'Ensure family financial security',
-      reason: 'Coverage amount is 2x your annual income (recommended: 10x)'
-    },
-    { 
-      id: '4', 
-      title: 'Tax Planning', 
-      description: 'Plan investments for tax benefits under Section 80C', 
-      priority: 'MEDIUM' as const,
-      confidence: 82,
-      benefit: 'Save up to ₹1,50,000 in taxes',
-      reason: 'Tax season approaches in 3 months'
-    },
-  ];
+const formatDuration = (days: number): string => {
+  if (days <= 0) return 'Matured';
+  if (days < 60) return `${days} day${days === 1 ? '' : 's'}`;
+  const months = Math.round(days / 30);
+  return `${months} month${months === 1 ? '' : 's'}`;
+};
 
-  const goals = [
-    { id: '1', name: 'House Down Payment', target: 1500000, current: 350000, progress: 23 },
-    { id: '2', name: 'Child Education', target: 1000000, current: 150000, progress: 15 },
-    { id: '3', name: 'Retirement', target: 20000000, current: 250000, progress: 1.25 },
-  ];
+// Progress from start date to maturity date, clamped 0-100
+const depositProgress = (start: string, maturity: string): number => {
+  const s = new Date(start).getTime();
+  const m = new Date(maturity).getTime();
+  const now = Date.now();
+  if (m <= s) return 100;
+  return Math.min(100, Math.max(0, ((now - s) / (m - s)) * 100));
+};
 
-  const renderAccountItem = ({ item }: any) => (
-    <Card style={styles.accountItem}>
-      <View style={styles.accountHeader}>
-        <View>
-          <Text style={styles.accountName}>{item.name}</Text>
-          <Text style={styles.accountType}>{item.type}</Text>
-        </View>
-        <Text style={styles.accountBalance}>₹{item.balance.toLocaleString()}</Text>
-      </View>
-      <View style={styles.accountFooter}>
-        <Text style={styles.accountGrowth}>{item.growth}</Text>
-        <TouchableOpacity>
-          <Text style={styles.manageText}>Manage</Text>
-        </TouchableOpacity>
-      </View>
-    </Card>
-  );
+// Repayment progress for a loan
+const loanProgress = (original: number, outstanding: number): number => {
+  if (original <= 0) return 0;
+  return Math.min(100, Math.max(0, ((original - outstanding) / original) * 100));
+};
 
-  const renderRecommendationItem = ({ item }: any) => (
-    <Card style={styles.recommendationItem}>
-      <View style={styles.recommendationHeader}>
-        <Text style={styles.recommendationTitle}>{item.title}</Text>
-        <RiskBadge level={item.priority} showIcon={true} size="sm" />
-      </View>
-      <Text style={styles.recommendationDescription}>{item.description}</Text>
-      
-      <View style={styles.recommendationMeta}>
-        <View style={styles.metaItem}>
-          <Feather name="bar-chart-2" size={14} color={COLORS.textSecondary} />
-          <Text style={styles.metaText}>Confidence: {item.confidence}%</Text>
-        </View>
-        <View style={styles.metaItem}>
-          <Feather name="target" size={14} color={COLORS.textSecondary} />
-          <Text style={styles.metaText}>Benefit: {item.benefit}</Text>
-        </View>
-      </View>
-      
-      <View style={styles.reasonContainer}>
-        <Text style={styles.reasonLabel}>Why this recommendation?</Text>
-        <Text style={styles.reasonText}>{item.reason}</Text>
-      </View>
-      
-      <TouchableOpacity style={styles.actionButton}>
-        <Text style={styles.actionButtonText}>Take Action</Text>
-      </TouchableOpacity>
-    </Card>
-  );
+// Friendly framing for recommendation confidence — replaces "Confidence: 87%"
+const getConfidenceInfo = (score: number) => {
+  if (score >= 85) {
+    return { label: 'Very likely to help you', color: COLORS.success, bg: COLORS.success + '15' };
+  }
+  if (score >= 70) {
+    return { label: 'Likely to help you', color: COLORS.caution, bg: COLORS.cautionLight };
+  }
+  return { label: 'Worth considering', color: COLORS.info, bg: COLORS.info + '15' };
+};
 
-  const renderGoalItem = ({ item }: any) => (
-    <Card style={styles.goalItem}>
-      <View style={styles.goalHeader}>
-        <Text style={styles.goalName}>{item.name}</Text>
-        <Text style={styles.goalProgress}>{item.progress}%</Text>
-      </View>
-      <View style={styles.progressBar}>
-        <View 
-          style={[
-            styles.progressFill, 
-            { width: `${Math.min(item.progress, 100)}%`, backgroundColor: COLORS.primary }
-          ]} 
-        />
-      </View>
-      <View style={styles.goalValues}>
-        <Text style={styles.goalValue}>₹{item.current.toLocaleString()}</Text>
-        <Text style={styles.goalTarget}>of ₹{item.target.toLocaleString()}</Text>
-      </View>
-    </Card>
-  );
+// Recommendation type -> glossary key + chip label
+const TYPE_META: Record<string, { glossaryKey: string; chipLabel: string }> = {
+  'Emergency Fund': { glossaryKey: 'EMERGENCY_FUND', chipLabel: 'Emergency Fund' },
+  FD: { glossaryKey: 'FD', chipLabel: 'FD' },
+  RD: { glossaryKey: 'RD', chipLabel: 'RD' },
+  SIP: { glossaryKey: 'SIP', chipLabel: 'SIP' },
+};
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+// Deposit card (FD / RD)
+const DepositCard = ({ deposit }: { deposit: typeof depositsData[0] }) => {
+  const progress = depositProgress(deposit.startDate, deposit.maturityDate);
+  const remainingDays = daysUntil(deposit.maturityDate);
+  const isFD = deposit.depositType === 'FD';
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity>
-          <Feather name="arrow-left" size={24} color={COLORS.text} />
-        </TouchableOpacity>
-        <Text style={styles.title}>Wealth Overview</Text>
-        <TouchableOpacity>
-          <Feather name="more-vertical" size={24} color={COLORS.text} />
-        </TouchableOpacity>
+    <View style={styles.depositCard}>
+      <View style={styles.depositHeader}>
+        <View style={styles.depositTypeRow}>
+          <View style={[styles.typeChip, { backgroundColor: COLORS.primaryVeryLight }]}>
+            <Text style={styles.typeChipText}>{deposit.depositType}</Text>
+          </View>
+          <GlossaryPopup term={deposit.depositType as any} />
+        </View>
+        <Text style={styles.depositInstitution}>{deposit.institution}</Text>
       </View>
 
-      {/* Wealth Summary */}
-      <Card style={styles.summaryCard}>
-        <Text style={styles.summaryTitle}>Net Worth</Text>
-        <Text style={styles.netWorth}>₹{wealthData.netWorth.toLocaleString()}</Text>
-        <View style={styles.statsContainer}>
-          <View style={styles.statColumn}>
-            <Text style={styles.statLabel}>Assets</Text>
-            <Text style={styles.statValue}>₹{wealthData.totalAssets.toLocaleString()}</Text>
-          </View>
-          <View style={styles.statColumn}>
-            <Text style={styles.statLabel}>Liabilities</Text>
-            <Text style={styles.statValue}>₹{wealthData.totalLiabilities.toLocaleString()}</Text>
-          </View>
+      <View style={styles.depositValueRow}>
+        <View>
+          <Text style={styles.depositValueLabel}>Current Value</Text>
+          <Text style={styles.depositValue}>{formatCurrency(deposit.currentValue)}</Text>
         </View>
-      </Card>
-
-      {/* Cash Flow */}
-      <Card style={styles.cashFlowCard}>
-        <Text style={styles.cashFlowTitle}>Monthly Cash Flow</Text>
-        <View style={styles.cashFlowItems}>
-          <View style={styles.cashFlowItem}>
-            <Text style={styles.incomeLabel}>Income</Text>
-            <Text style={styles.incomeValue}>₹{wealthData.cashFlow.income.toLocaleString()}</Text>
-          </View>
-          <View style={styles.cashFlowItem}>
-            <Text style={styles.expenseLabel}>Expenses</Text>
-            <Text style={styles.expenseValue}>₹{wealthData.cashFlow.expenses.toLocaleString()}</Text>
-          </View>
-          <View style={styles.cashFlowItem}>
-            <Text style={styles.savingsLabel}>Savings</Text>
-            <Text style={styles.savingsValue}>₹{wealthData.cashFlow.savings.toLocaleString()}</Text>
-          </View>
+        <View style={styles.depositRateChip}>
+          <Text style={styles.depositRateText}>{deposit.interestRate}% p.a.</Text>
         </View>
-      </Card>
-
-      {/* Tabs */}
-      <View style={styles.tabsContainer}>
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'overview' && styles.activeTab]}
-          onPress={() => setActiveTab('overview')}
-        >
-          <Feather name="pie-chart" size={20} color={activeTab === 'overview' ? COLORS.primary : COLORS.textSecondary} />
-          <Text style={[styles.tabText, activeTab === 'overview' && styles.activeTabText]}>Overview</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'recommendations' && styles.activeTab]}
-          onPress={() => setActiveTab('recommendations')}
-        >
-          <Feather name="lightbulb" size={20} color={activeTab === 'recommendations' ? COLORS.primary : COLORS.textSecondary} />
-          <Text style={[styles.tabText, activeTab === 'recommendations' && styles.activeTabText]}>Recommendations</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'goals' && styles.activeTab]}
-          onPress={() => setActiveTab('goals')}
-        >
-          <Feather name="target" size={20} color={activeTab === 'goals' ? COLORS.primary : COLORS.textSecondary} />
-          <Text style={[styles.tabText, activeTab === 'goals' && styles.activeTabText]}>Goals</Text>
-        </TouchableOpacity>
       </View>
 
-      {/* Tab Content */}
-      {activeTab === 'overview' && (
-        <View style={styles.tabContent}>
-          <Text style={styles.sectionTitle}>Investment Accounts</Text>
-          <FlatList
-            data={investmentAccounts}
-            renderItem={renderAccountItem}
-            keyExtractor={(item) => item.id}
-            showsVerticalScrollIndicator={false}
-          />
-        </View>
-      )}
+      {/* Maturity progress */}
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: COLORS.primary }]} />
+      </View>
+      <View style={styles.depositFooterRow}>
+        <Text style={styles.depositFooterText}>
+          {isFD
+            ? `Started with ${formatCurrency(deposit.principal)}`
+            : `${formatCurrency(deposit.monthlyInstallment || 0)}/month`}
+        </Text>
+        <Text style={styles.depositFooterText}>
+          {remainingDays > 0 ? `Matures in ${formatDuration(remainingDays)}` : 'Matured'}
+        </Text>
+      </View>
+    </View>
+  );
+};
 
-      {activeTab === 'recommendations' && (
-        <View style={styles.tabContent}>
-          <Text style={styles.sectionTitle}>Personalized Recommendations</Text>
-          <FlatList
-            data={recommendations}
-            renderItem={renderRecommendationItem}
-            keyExtractor={(item) => item.id}
-            showsVerticalScrollIndicator={false}
-          />
-        </View>
-      )}
+// Loan card
+const LoanCard = ({ loan }: { loan: typeof loansData[0] }) => {
+  const progress = loanProgress(loan.originalAmount, loan.outstandingAmount);
 
-      {activeTab === 'goals' && (
-        <View style={styles.tabContent}>
-          <Text style={styles.sectionTitle}>Financial Goals</Text>
-          <FlatList
-            data={goals}
-            renderItem={renderGoalItem}
-            keyExtractor={(item) => item.id}
-            showsVerticalScrollIndicator={false}
-          />
+  return (
+    <View style={styles.depositCard}>
+      <View style={styles.depositHeader}>
+        <View style={styles.depositTypeRow}>
+          <View style={[styles.typeChip, { backgroundColor: COLORS.dangerLight }]}>
+            <Text style={[styles.typeChipText, { color: COLORS.danger }]}>{loan.loanType} Loan</Text>
+          </View>
         </View>
-      )}
+        <Text style={styles.depositInstitution}>{loan.institution}</Text>
+      </View>
 
-      {/* Wealth Insights */}
-      <Card style={styles.insightsCard}>
-        <View style={styles.insightsHeader}>
-          <Feather name="trending-up" size={20} color={COLORS.success} />
-          <Text style={styles.insightsTitle}>Wealth Insights</Text>
+      <View style={styles.depositValueRow}>
+        <View>
+          <Text style={styles.depositValueLabel}>Outstanding Amount</Text>
+          <Text style={[styles.depositValue, { color: COLORS.text }]}>
+            {formatCurrency(loan.outstandingAmount)}
+          </Text>
         </View>
-        <Text style={styles.insightsText}>Your financial health is improving! Your monthly savings have increased by 15% compared to last quarter.</Text>
-        <TouchableOpacity style={styles.insightsButton}>
-          <Text style={styles.insightsButtonText}>View Full Analysis</Text>
-        </TouchableOpacity>
-      </Card>
+        <View style={styles.emiChip}>
+          <GlossaryPopup term="EMI">
+            <View style={styles.emiChipTouchable}>
+              <Text style={styles.emiChipText}>{formatCurrency(loan.emi)}/mo EMI</Text>
+              <Feather name="help-circle" size={12} color={COLORS.textTertiary} />
+            </View>
+          </GlossaryPopup>
+        </View>
+      </View>
+
+      {/* Repayment progress */}
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: COLORS.success }]} />
+      </View>
+      <View style={styles.depositFooterRow}>
+        <Text style={styles.depositFooterText}>{Math.round(progress)}% paid off</Text>
+        <Text style={styles.depositFooterText}>
+          {loan.remainingTenureMonths} month{loan.remainingTenureMonths === 1 ? '' : 's'} left
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+// Recommendation card
+const RecommendationCard = ({
+  rec,
+  expanded,
+  onToggle,
+}: {
+  rec: typeof recommendationsData[0];
+  expanded: boolean;
+  onToggle: () => void;
+}) => {
+  const confidence = getConfidenceInfo(rec.confidenceScore);
+  const meta = TYPE_META[rec.recommendationType] || { glossaryKey: '', chipLabel: rec.recommendationType };
+
+  return (
+    <View style={styles.recCard}>
+      <View style={styles.recHeader}>
+        <View style={styles.recIconWrap}>
+          <Feather name={rec.icon as any} size={20} color={COLORS.accent} />
+        </View>
+        <View style={styles.recHeaderText}>
+          <Text style={styles.recTitle}>{rec.title}</Text>
+          <View style={styles.recTypeRow}>
+            <View style={styles.recTypeChip}>
+              <Text style={styles.recTypeChipText}>{meta.chipLabel}</Text>
+            </View>
+            {meta.glossaryKey ? (
+              <GlossaryPopup term={meta.glossaryKey as any} />
+            ) : null}
+          </View>
+        </View>
+      </View>
+
+      <Text style={styles.recText}>{rec.recommendationText}</Text>
+
+      {/* How sure are we */}
+      <View style={[styles.confidenceBadge, { backgroundColor: confidence.bg }]}>
+        <Feather name="compass" size={13} color={confidence.color} />
+        <Text style={[styles.confidenceText, { color: confidence.color }]}>{confidence.label}</Text>
+      </View>
+
+      {/* Expected benefit — always visible */}
+      <View style={styles.benefitRow}>
+        <Feather name="gift" size={14} color={COLORS.success} />
+        <Text style={styles.benefitText}>{rec.expectedBenefit}</Text>
+      </View>
+
+      {/* Why — expandable */}
+      <TouchableOpacity style={styles.whyRow} onPress={onToggle} activeOpacity={0.7}>
+        <Text style={styles.whyLabel}>Why are we suggesting this?</Text>
+        <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.textTertiary} />
+      </TouchableOpacity>
+      {expanded && <Text style={styles.whyText}>{rec.reason}</Text>}
+    </View>
+  );
+};
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+const WealthOverviewScreen = () => {
+  const [expandedRecId, setExpandedRecId] = useState<string | null>(null);
+
+  // ── Net Worth calculation (data-driven, backend-ready) ──────────────────────
+  const totalAccountBalance = accountsData.reduce((sum, a) => sum + a.balance, 0);
+  const totalDepositValue = depositsData.reduce((sum, d) => sum + d.currentValue, 0);
+  const totalAssets = totalAccountBalance + totalDepositValue;
+  const totalLiabilities = loansData.reduce((sum, l) => sum + l.outstandingAmount, 0);
+  const netWorth = totalAssets - totalLiabilities;
+
+  // ── Cash flow calculation ────────────────────────────────────────────────────
+  // Exclude BLOCKED transactions — money never left the account, so it
+  // shouldn't count against (or for) the user's cash flow.
+  const nonBlocked = transactionsData.filter((t) => t.decision !== 'BLOCK');
+  const income = nonBlocked.filter((t) => t.amount > 0).reduce((sum, t) => sum + t.amount, 0);
+  const expenses = nonBlocked
+    .filter((t) => t.amount < 0)
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const savings = income - expenses;
+  const savingsRate = income > 0 ? Math.round((savings / income) * 100) : 0;
+
+  const expensesPct = income > 0 ? Math.min(100, (expenses / income) * 100) : 0;
+  const savingsPct = income > 0 ? Math.max(0, 100 - expensesPct) : 0;
+
+  return (
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      {/* ── Hero: Net Worth ── */}
+      <View style={styles.hero}>
+        <View style={styles.netWorthLabelRow}>
+          <Text style={styles.netWorthLabel}>Net Worth</Text>
+          <GlossaryPopup term="NET_WORTH">
+            <Feather name="help-circle" size={14} color={COLORS.textOnDarkSub} />
+          </GlossaryPopup>
+        </View>
+        <Text style={styles.netWorthValue}>{formatCurrency(netWorth)}</Text>
+
+        <View style={styles.assetLiabilityRow}>
+          <View style={styles.assetLiabilityPill}>
+            <Feather name="arrow-up-circle" size={14} color={COLORS.textOnDark} />
+            <View>
+              <Text style={styles.pillLabel}>What you own</Text>
+              <Text style={styles.pillValue}>{formatCurrency(totalAssets)}</Text>
+            </View>
+          </View>
+          <View style={styles.assetLiabilityPill}>
+            <Feather name="arrow-down-circle" size={14} color={COLORS.textOnDark} />
+            <View>
+              <Text style={styles.pillLabel}>What you owe</Text>
+              <Text style={styles.pillValue}>{formatCurrency(totalLiabilities)}</Text>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {/* ── Content ── */}
+      <View style={styles.content}>
+        {/* Cash Flow */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>This Month's Cash Flow</Text>
+
+          <View style={styles.cashFlowCard}>
+            {/* Stacked bar: expenses + savings, out of income */}
+            <View style={styles.cashFlowBar}>
+              <View style={[styles.cashFlowBarSegment, { flex: expensesPct, backgroundColor: COLORS.danger }]} />
+              <View style={[styles.cashFlowBarSegment, { flex: savingsPct, backgroundColor: COLORS.accent }]} />
+            </View>
+
+            <View style={styles.cashFlowStatsRow}>
+              <View style={styles.cashFlowStat}>
+                <View style={[styles.cashFlowDot, { backgroundColor: COLORS.success }]} />
+                <Text style={styles.cashFlowStatLabel}>Income</Text>
+                <Text style={[styles.cashFlowStatValue, { color: COLORS.success }]}>
+                  {formatCurrency(income)}
+                </Text>
+              </View>
+              <View style={styles.cashFlowStat}>
+                <View style={[styles.cashFlowDot, { backgroundColor: COLORS.danger }]} />
+                <Text style={styles.cashFlowStatLabel}>Expenses</Text>
+                <Text style={[styles.cashFlowStatValue, { color: COLORS.danger }]}>
+                  {formatCurrency(expenses)}
+                </Text>
+              </View>
+              <View style={styles.cashFlowStat}>
+                <View style={[styles.cashFlowDot, { backgroundColor: COLORS.accent }]} />
+                <Text style={styles.cashFlowStatLabel}>Savings</Text>
+                <Text style={[styles.cashFlowStatValue, { color: COLORS.accentDark }]}>
+                  {formatCurrency(savings)}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.savingsRateNote}>
+              <Feather name="trending-up" size={14} color={COLORS.primary} />
+              <Text style={styles.savingsRateText}>
+                You saved about {savingsRate}% of what you earned this month — nice work!
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.sectionDivider} />
+
+        {/* My Deposits */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>My Deposits</Text>
+          {depositsData.map((deposit) => (
+            <DepositCard key={deposit.depositId} deposit={deposit} />
+          ))}
+        </View>
+
+        <View style={styles.sectionDivider} />
+
+        {/* My Loans */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>My Loans</Text>
+          {loansData.map((loan) => (
+            <LoanCard key={loan.loanId} loan={loan} />
+          ))}
+        </View>
+
+        <View style={styles.sectionDivider} />
+
+        {/* Smart Recommendations */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Smart Recommendations</Text>
+          <Text style={styles.sectionSubtitle}>
+            A few ideas based on your accounts, deposits, and spending
+          </Text>
+
+          {recommendationsData.map((rec) => (
+            <RecommendationCard
+              key={rec.recommendationId}
+              rec={rec}
+              expanded={expandedRecId === rec.recommendationId}
+              onToggle={() =>
+                setExpandedRecId((prev) => (prev === rec.recommendationId ? null : rec.recommendationId))
+              }
+            />
+          ))}
+        </View>
+
+        <View style={{ height: SPACING.xxl }} />
+      </View>
     </ScrollView>
   );
 };
 
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: COLORS.primaryDark,
   },
-  contentContainer: {
-    padding: SPACING.lg,
-    paddingBottom: SPACING.xxl,
+
+  // Hero
+  hero: {
+    backgroundColor: COLORS.primaryDark,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.md,
+    paddingBottom: SPACING.xl,
   },
-  header: {
+  netWorthLabelRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.xl,
+    gap: SPACING.xs,
+    marginBottom: SPACING.xs,
   },
-  title: {
-    ...TYPOGRAPHY.h3,
-    fontWeight: '600',
-    color: COLORS.text,
+  netWorthLabel: {
+    ...TYPOGRAPHY.label,
+    color: COLORS.textOnDarkSub,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   },
-  summaryCard: {
-    marginBottom: SPACING.lg,
-    padding: SPACING.lg,
-  },
-  summaryTitle: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.textSecondary,
-    marginBottom: SPACING.sm,
-  },
-  netWorth: {
-    ...TYPOGRAPHY.h2,
+  netWorthValue: {
+    ...TYPOGRAPHY.display,
+    color: COLORS.accent,
     fontWeight: '700',
-    color: COLORS.primary,
-    marginBottom: SPACING.md,
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  statColumn: {
-    alignItems: 'center',
-  },
-  statLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-  },
-  statValue: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginTop: SPACING.xs,
-  },
-  cashFlowCard: {
     marginBottom: SPACING.lg,
-    padding: SPACING.lg,
   },
-  cashFlowTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.md,
-  },
-  cashFlowItems: {
+  assetLiabilityRow: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    gap: SPACING.md,
   },
-  cashFlowItem: {
-    alignItems: 'center',
-  },
-  incomeLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-  },
-  incomeValue: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
-    color: COLORS.success,
-    marginTop: SPACING.xs,
-  },
-  expenseLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-  },
-  expenseValue: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
-    color: COLORS.danger,
-    marginTop: SPACING.xs,
-  },
-  savingsLabel: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-  },
-  savingsValue: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
-    color: COLORS.primary,
-    marginTop: SPACING.xs,
-  },
-  tabsContainer: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.surface,
-    borderRadius: BORDER_RADIUS.lg,
-    marginBottom: SPACING.lg,
-    ...SHADOWS.small,
-  },
-  tab: {
+  assetLiabilityPill: {
     flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: SPACING.md,
+    gap: SPACING.sm,
+    backgroundColor: 'rgba(255,255,255,0.08)',
     borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.md,
   },
-  activeTab: {
-    backgroundColor: COLORS.primaryLight,
+  pillLabel: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textOnDarkSub,
   },
-  tabText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-    marginTop: SPACING.xs,
+  pillValue: {
+    ...TYPOGRAPHY.bodySmMedium,
+    color: COLORS.textOnDark,
+    fontWeight: '700',
+    marginTop: 1,
   },
-  activeTabText: {
-    color: COLORS.primary,
-    fontWeight: '600',
+
+  // Content
+  content: {
+    backgroundColor: COLORS.background,
+    borderTopLeftRadius: BORDER_RADIUS.xxxl,
+    borderTopRightRadius: BORDER_RADIUS.xxxl,
+    marginTop: -BORDER_RADIUS.xl,
+    paddingTop: SPACING.xl,
   },
-  tabContent: {
-    marginBottom: SPACING.lg,
+  sectionDivider: {
+    height: SPACING.xs,
+    backgroundColor: COLORS.divider,
+  },
+  section: {
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.lg,
   },
   sectionTitle: {
     ...TYPOGRAPHY.h4,
-    fontWeight: '600',
     color: COLORS.text,
+    fontWeight: '700',
+    marginBottom: SPACING.xs,
+  },
+  sectionSubtitle: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
     marginBottom: SPACING.md,
   },
-  accountItem: {
-    padding: SPACING.md,
-    marginBottom: SPACING.sm,
+
+  // Cash flow
+  cashFlowCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.lg,
+    marginTop: SPACING.sm,
+    ...SHADOWS.small,
   },
-  accountHeader: {
+  cashFlowBar: {
+    flexDirection: 'row',
+    height: 10,
+    borderRadius: BORDER_RADIUS.full,
+    overflow: 'hidden',
+    backgroundColor: COLORS.divider,
+    marginBottom: SPACING.md,
+  },
+  cashFlowBarSegment: {
+    height: '100%',
+  },
+  cashFlowStatsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: SPACING.xs,
+    marginBottom: SPACING.md,
   },
-  accountName: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
-    color: COLORS.text,
+  cashFlowStat: {
+    flex: 1,
   },
-  accountType: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-  },
-  accountBalance: {
-    ...TYPOGRAPHY.body,
-    fontWeight: 'bold',
-    color: COLORS.text,
-  },
-  accountFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  accountGrowth: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.success,
-    fontWeight: '600',
-  },
-  manageText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.primary,
-    fontWeight: '600',
-  },
-  recommendationItem: {
-    padding: SPACING.md,
-    marginBottom: SPACING.sm,
-  },
-  recommendationHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
-  },
-  recommendationTitle: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  recommendationDescription: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-    marginBottom: SPACING.sm,
-  },
-  recommendationMeta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: SPACING.sm,
-  },
-  metaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  metaText: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.textSecondary,
-    marginLeft: SPACING.xs,
-  },
-  reasonContainer: {
-    marginBottom: SPACING.sm,
-  },
-  reasonLabel: {
-    ...TYPOGRAPHY.caption,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.xs,
-  },
-  reasonText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-  },
-  actionButton: {
-    backgroundColor: COLORS.primary,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
-    alignItems: 'center',
-  },
-  actionButtonText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.surface,
-    fontWeight: '600',
-  },
-  goalItem: {
-    padding: SPACING.md,
-    marginBottom: SPACING.sm,
-  },
-  goalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
-  },
-  goalName: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  goalProgress: {
-    ...TYPOGRAPHY.body,
-    fontWeight: '600',
-    color: COLORS.primary,
-  },
-  progressBar: {
+  cashFlowDot: {
+    width: 8,
     height: 8,
-    backgroundColor: COLORS.border,
-    borderRadius: 4,
+    borderRadius: BORDER_RADIUS.full,
+    marginBottom: SPACING.xs,
+  },
+  cashFlowStatLabel: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+  },
+  cashFlowStatValue: {
+    ...TYPOGRAPHY.bodySmMedium,
+    fontWeight: '700',
+    marginTop: 1,
+  },
+  savingsRateNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
+    paddingTop: SPACING.md,
+  },
+  savingsRateText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+    flex: 1,
+    lineHeight: 19,
+  },
+
+  // Deposit / Loan card (shared layout)
+  depositCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.lg,
+    marginTop: SPACING.sm,
+    ...SHADOWS.small,
+  },
+  depositHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.md,
+  },
+  depositTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  typeChip: {
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+  },
+  typeChipText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.primaryMedium,
+  },
+  depositInstitution: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+  },
+  depositValueRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginBottom: SPACING.md,
+  },
+  depositValueLabel: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+    marginBottom: 2,
+  },
+  depositValue: {
+    ...TYPOGRAPHY.h3,
+    color: COLORS.primary,
+    fontWeight: '700',
+  },
+  depositRateChip: {
+    backgroundColor: COLORS.accentLight,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+  },
+  depositRateText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.accentDark,
+  },
+  emiChip: {
+    alignItems: 'flex-end',
+  },
+  emiChipTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: COLORS.surfaceLight,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+  },
+  emiChipText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.textSecondary,
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.divider,
     overflow: 'hidden',
     marginBottom: SPACING.sm,
   },
   progressFill: {
     height: '100%',
+    borderRadius: BORDER_RADIUS.full,
   },
-  goalValues: {
+  depositFooterRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  goalValue: {
-    ...TYPOGRAPHY.bodySm,
-    fontWeight: '600',
-    color: COLORS.text,
+  depositFooterText: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
   },
-  goalTarget: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-  },
-  insightsCard: {
+
+  // Recommendation card
+  recCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
     padding: SPACING.lg,
+    marginTop: SPACING.sm,
+    ...SHADOWS.small,
   },
-  insightsHeader: {
+  recHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.md,
+    marginBottom: SPACING.sm,
+  },
+  recIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: BORDER_RADIUS.md,
+    backgroundColor: COLORS.accentLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  recHeaderText: {
+    flex: 1,
+  },
+  recTitle: {
+    ...TYPOGRAPHY.bodyMedium,
+    color: COLORS.text,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  recTypeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: SPACING.md,
+    gap: SPACING.xs,
   },
-  insightsTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginLeft: SPACING.sm,
+  recTypeChip: {
+    backgroundColor: COLORS.primaryVeryLight,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 2,
   },
-  insightsText: {
-    ...TYPOGRAPHY.body,
+  recTypeChipText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.primaryMedium,
+  },
+  recText: {
+    ...TYPOGRAPHY.bodySm,
     color: COLORS.textSecondary,
+    lineHeight: 20,
     marginBottom: SPACING.md,
   },
-  insightsButton: {
-    backgroundColor: COLORS.primary,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
+  confidenceBadge: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: SPACING.xs,
+    alignSelf: 'flex-start',
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 4,
+    marginBottom: SPACING.sm,
   },
-  insightsButtonText: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.surface,
-    fontWeight: '600',
+  confidenceText: {
+    ...TYPOGRAPHY.captionBold,
+  },
+  benefitRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  benefitText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.text,
+    flex: 1,
+    lineHeight: 19,
+  },
+  whyRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
+    paddingTop: SPACING.sm,
+  },
+  whyLabel: {
+    ...TYPOGRAPHY.bodySmMedium,
+    color: COLORS.primary,
+  },
+  whyText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+    marginTop: SPACING.sm,
+    lineHeight: 19,
   },
 });
 

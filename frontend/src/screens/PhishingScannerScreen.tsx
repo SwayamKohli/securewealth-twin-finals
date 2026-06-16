@@ -1,493 +1,631 @@
 // src/screens/PhishingScannerScreen.tsx
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
-import { Feather } from '@expo/vector-icons';
-import { COLORS } from '../constants/colors';
-import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
-import Card from '../components/common/Card';
-import RiskBadge from '../components/common/RiskBadge';
+// SecureWealth Twin — Check a Message
+//
+// Flow:
+//  1. User pastes/types a message or link, or taps an example chip
+//  2. "Check This Message" -> 'scanning' phase (animated magnifier + cycling text)
+//  3. -> 'result' phase, built from PHISHING_STYLES (theme.ts):
+//       SAFE       -> "Looks Safe"
+//       SUSPICIOUS -> "Be Careful"
+//       PHISHING   -> "This Looks Like a Scam"
+//     Plus collapsible "What We Found" signals and "What should I do?" steps.
+//  4. "Check Another Message" resets to idle.
+//
+// A static "Common Warning Signs" reference card stays visible below, so the
+// screen is educational even before a scan.
+//
+// When the real backend is ready: replace `analyzeMessage()` with
+// POST /phishing/scan — return shape (PhishingAssessment) should match
+// phishing_engine.py + explainability_engine.py output.
 
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  Animated,
+  Easing,
+  Alert,
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
+
+import { COLORS } from '../constants/colors';
+import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS, PHISHING_STYLES } from '../constants/theme';
+import { analyzeMessage, PhishingAssessment } from '../utils/phishingAnalyzer';
+import phishingSignalsData from '../../mockData/phishing_signals.json';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+type Phase = 'idle' | 'scanning' | 'result';
+
+const signalDefs = phishingSignalsData.signalDefinitions as Record<
+  string,
+  { friendlyName: string; explanation: string; icon: string }
+>;
+
+// Cycling messages during the scanning phase
+const SCAN_STEPS = [
+  'Reading the message\u2026',
+  'Checking for suspicious links\u2026',
+  'Comparing with known scam patterns\u2026',
+  'Putting together our answer\u2026',
+];
+
+// "What should I do?" guidance per result status
+const ACTION_STEPS: Record<string, string[]> = {
+  SAFE: [
+    'This message looks fine — no action needed.',
+    'Still unsure? Call us using the number on the back of your card, never a number from the message.',
+  ],
+  SUSPICIOUS: [
+    "Don't click any links or reply to this message.",
+    'Contact us only through our official app or the number on your card.',
+    "Once you're sure, you can delete the message.",
+  ],
+  PHISHING: [
+    'Do not click any links or reply.',
+    'Never share your OTP, PIN, password, or card details — we will never ask for these.',
+    'Report this message using the button below, then delete it.',
+  ],
+};
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+// Animated magnifier shown during the scanning phase
+const ScanningView = () => {
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const [stepIndex, setStepIndex] = useState(0);
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+
+    const interval = setInterval(() => {
+      setStepIndex((i) => (i + 1) % SCAN_STEPS.length);
+    }, 400);
+    return () => clearInterval(interval);
+  }, []);
+
+  const scale = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
+
+  return (
+    <View style={styles.scanningContainer}>
+      <Animated.View style={[styles.scanningIconWrap, { transform: [{ scale }] }]}>
+        <Feather name="search" size={48} color={COLORS.primary} />
+      </Animated.View>
+      <Text style={styles.scanningTitle}>Checking this message</Text>
+      <Text style={styles.scanningStep}>{SCAN_STEPS[stepIndex]}</Text>
+    </View>
+  );
+};
+
+// Collapsible "what we found" signal row
+const SignalRow = ({
+  signalId,
+  expanded,
+  onToggle,
+}: {
+  signalId: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) => {
+  const def = signalDefs[signalId];
+  if (!def) return null;
+
+  return (
+    <TouchableOpacity style={styles.signalRow} onPress={onToggle} activeOpacity={0.7}>
+      <View style={styles.signalRowHeader}>
+        <View style={styles.signalIconWrap}>
+          <Feather name={def.icon as any} size={16} color={COLORS.danger} />
+        </View>
+        <Text style={styles.signalName}>{def.friendlyName}</Text>
+        <Feather
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={16}
+          color={COLORS.textTertiary}
+        />
+      </View>
+      {expanded && <Text style={styles.signalExplanation}>{def.explanation}</Text>}
+    </TouchableOpacity>
+  );
+};
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
 const PhishingScannerScreen = () => {
   const [inputText, setInputText] = useState('');
-  const [scanResult, setScanResult] = useState<any>(null);
-  const [isScanning, setIsScanning] = useState(false);
+  const [phase, setPhase] = useState<Phase>('idle');
+  const [result, setResult] = useState<PhishingAssessment | null>(null);
+  const [expandedSignal, setExpandedSignal] = useState<string | null>(null);
 
-  // Mock scan function
-  const handleScan = async () => {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(12)).current;
+
+  const handleExampleTap = (text: string) => {
+    setInputText(text);
+    setPhase('idle');
+    setResult(null);
+  };
+
+  const handleScan = () => {
     if (!inputText.trim()) {
-      Alert.alert('Error', 'Please enter a message or URL to scan');
+      Alert.alert('Add a message', 'Paste or type a message or link to check first.');
       return;
     }
 
-    setIsScanning(true);
-    try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    setPhase('scanning');
+    setResult(null);
+    setExpandedSignal(null);
 
-      // Mock scan results based on input
-      let result;
-      if (inputText.toLowerCase().includes('urgent') && inputText.toLowerCase().includes('click')) {
-        result = {
-          status: 'PHISHING',
-          confidence: 95,
-          riskLevel: 'CRITICAL' as const,
-          threats: [
-            'Creates urgency',
-            'Requests sensitive information',
-            'Suspicious link detected'
-          ],
-          explanation: 'This message creates urgency and requests sensitive information, which are common phishing patterns. The included link redirects to a suspicious domain.',
-          safetyTips: [
-            'Never click links in unsolicited messages',
-            'Verify sender identity through official channels',
-            'Report suspicious messages to bank'
-          ]
-        };
-      } else if (inputText.toLowerCase().includes('verify') && inputText.toLowerCase().includes('account')) {
-        result = {
-          status: 'SUSPICIOUS',
-          confidence: 78,
-          riskLevel: 'HIGH' as const,
-          threats: [
-            'Requests account verification',
-            'Uses official-looking language'
-          ],
-          explanation: 'This message asks for account verification, which banks typically don\'t request via text. Be cautious of such requests.',
-          safetyTips: [
-            'Contact bank through official app/website',
-            'Don\'t reply to suspicious messages',
-            'Block the sender'
-          ]
-        };
-      } else {
-        result = {
-          status: 'SAFE',
-          confidence: 98,
-          riskLevel: 'LOW' as const,
-          threats: [],
-          explanation: 'No suspicious patterns detected in this message. It appears to be legitimate.',
-          safetyTips: [
-            'Continue practicing good security habits',
-            'Be vigilant about unsolicited requests'
-          ]
-        };
-      }
+    setTimeout(() => {
+      const assessment = analyzeMessage(inputText);
+      setResult(assessment);
+      setPhase('result');
 
-      setScanResult(result);
-    } catch (error) {
-      console.error('Scan failed:', error);
-      Alert.alert('Error', 'Scan failed. Please try again.');
-    } finally {
-      setIsScanning(false);
-    }
+      fadeAnim.setValue(0);
+      slideAnim.setValue(12);
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 350,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }, 1400);
   };
 
-  const handlePaste = async () => {
-    // In a real app, you'd use Clipboard API
-    Alert.alert('Paste', 'Paste functionality would be implemented in the full app');
+  const handleReset = () => {
+    setInputText('');
+    setResult(null);
+    setPhase('idle');
+    setExpandedSignal(null);
   };
 
-  const handleHistory = () => {
-    console.log('Viewing scan history...');
-    // Navigate to scan history
+  const handleReport = () => {
+    Alert.alert(
+      'Thanks for reporting',
+      "We've noted this message. Our security team uses reports like this to help protect everyone."
+    );
   };
+
+  const phishingStyle = result ? PHISHING_STYLES[result.status] : null;
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity>
-          <Feather name="arrow-left" size={24} color={COLORS.text} />
-        </TouchableOpacity>
-        <Text style={styles.title}>Phishing Scanner</Text>
-        <TouchableOpacity onPress={handleHistory}>
-          <Feather name="history" size={24} color={COLORS.text} />
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
+      {/* ── Intro ── */}
+      <View style={styles.introCard}>
+        <Text style={styles.introTitle}>What would you like to check?</Text>
+        <Text style={styles.introSubtitle}>
+          Paste a suspicious text message, email, or link below — we'll check it for
+          common scam warning signs.
+        </Text>
+
+        {/* Example chips */}
+        <Text style={styles.exampleLabel}>Try an example</Text>
+        <View style={styles.exampleRow}>
+          {phishingSignalsData.exampleMessages.map((ex) => (
+            <TouchableOpacity
+              key={ex.id}
+              style={styles.exampleChip}
+              onPress={() => handleExampleTap(ex.text)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.exampleChipText}>{ex.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Input */}
+        <TextInput
+          style={styles.textInput}
+          placeholder="Paste the message or link here..."
+          placeholderTextColor={COLORS.textTertiary}
+          value={inputText}
+          onChangeText={(text) => {
+            setInputText(text);
+            if (phase === 'result') {
+              setPhase('idle');
+              setResult(null);
+            }
+          }}
+          multiline
+          textAlignVertical="top"
+        />
+
+        <TouchableOpacity
+          style={[styles.scanBtn, !inputText.trim() && styles.scanBtnDisabled]}
+          onPress={handleScan}
+          disabled={!inputText.trim() || phase === 'scanning'}
+          activeOpacity={0.8}
+        >
+          <Feather name="search" size={18} color={COLORS.textOnDark} />
+          <Text style={styles.scanBtnText}>Check This Message</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Input Card */}
-      <Card style={styles.inputCard}>
-        <Text style={styles.sectionTitle}>Scan Suspicious Content</Text>
-        <Text style={styles.sectionSubtitle}>Paste suspicious messages, URLs, or content to analyze</Text>
-        
-        <TextInput
-          style={styles.textInput}
-          placeholder="Paste suspicious message or URL here..."
-          value={inputText}
-          onChangeText={setInputText}
-          multiline
-          numberOfLines={6}
-          textAlignVertical="top"
-        />
-        
-        <View style={styles.inputActions}>
-          <TouchableOpacity style={styles.pasteButton} onPress={handlePaste}>
-            <Feather name="clipboard" size={20} color={COLORS.primary} />
-            <Text style={styles.pasteButtonText}>Paste</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.scanButton, isScanning && styles.scanButtonDisabled]}
-            onPress={handleScan}
-            disabled={isScanning}
-          >
-            <Feather name={isScanning ? "loader" : "search"} size={20} color={COLORS.textOnDark} />
-            <Text style={styles.scanButtonText}>
-              {isScanning ? 'Scanning...' : 'Scan for Phishing'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </Card>
+      {/* ── Scanning phase ── */}
+      {phase === 'scanning' && <ScanningView />}
 
-      {/* Results */}
-      {scanResult && (
-        <Card style={styles.resultCard}>
-          <View style={styles.resultHeader}>
-            <View style={[
-              styles.resultIconContainer,
-              { 
-                backgroundColor: 
-                  scanResult.status === 'PHISHING' ? COLORS.s_danger + '20' : 
-                  scanResult.status === 'SUSPICIOUS' ? COLORS.warning + '20' : 
-                  COLORS.success + '20'
-              }
-            ]}>
-              {scanResult.status === 'PHISHING' && <Feather name="alert-triangle" size={24} color={COLORS.s_danger} />}
-              {scanResult.status === 'SUSPICIOUS' && <Feather name="alert-circle" size={24} color={COLORS.warning} />}
-              {scanResult.status === 'SAFE' && <Feather name="shield-check" size={24} color={COLORS.success} />}
-            </View>
-            
-            <View style={styles.resultInfo}>
-              <View style={styles.resultStatusRow}>
-                {/* <Text style={styles.resultStatus}>{scanResult.status}</Text> */}
-                <Text
-                style={[
-                    styles.resultStatus,
-                    {
-                    color:
-                        scanResult.status === 'PHISHING'
-                        ? COLORS.danger
-                        : scanResult.status === 'SUSPICIOUS'
-                        ? COLORS.warning
-                        : COLORS.success,
-                    },
-                ]}
-                >
-                {scanResult.status}
+      {/* ── Result phase ── */}
+      {phase === 'result' && result && phishingStyle && (
+        <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+          {/* Result header */}
+          <View style={[styles.resultCard, { backgroundColor: phishingStyle.bgColor }]}>
+            <View style={styles.resultHeader}>
+              <Feather name={phishingStyle.icon as any} size={32} color={phishingStyle.color} />
+              <View style={styles.resultHeaderText}>
+                <Text style={[styles.resultLabel, { color: phishingStyle.color }]}>
+                  {phishingStyle.label}
                 </Text>
-                <RiskBadge level={scanResult.riskLevel} showIcon={true} size="sm" />
+                <Text style={styles.resultSublabel}>{phishingStyle.sublabel}</Text>
               </View>
-              <Text style={styles.resultConfidence}>Confidence: {scanResult.confidence}%</Text>
             </View>
           </View>
 
-          {/* Threats */}
-          {scanResult.threats.length > 0 && (
-            <View style={styles.threatsContainer}>
-              <Text style={styles.threatsTitle}>Detected Threats:</Text>
-              {scanResult.threats.map((threat: string, index: number) => (
-                <View key={index} style={styles.threatItem}>
-                  <Feather name="x-circle" size={16} color={COLORS.danger} />
-                  <Text style={styles.threatText}>{threat}</Text>
-                </View>
+          {/* What we found */}
+          {result.signalIds.length > 0 && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>What We Found</Text>
+              {result.signalIds.map((id) => (
+                <SignalRow
+                  key={id}
+                  signalId={id}
+                  expanded={expandedSignal === id}
+                  onToggle={() => setExpandedSignal((prev) => (prev === id ? null : id))}
+                />
               ))}
             </View>
           )}
 
-          {/* Explanation */}
-          <View style={styles.explanationContainer}>
-            <Text style={styles.explanationTitle}>Security Analysis:</Text>
-            <Text style={styles.explanationText}>{scanResult.explanation}</Text>
-          </View>
-
-          {/* Safety Tips */}
-          <View style={styles.tipsContainer}>
-            <Text style={styles.tipsTitle}>Safety Tips:</Text>
-            {scanResult.safetyTips.map((tip: string, index: number) => (
-              <View key={index} style={styles.tipItem}>
-                <Feather name="check-circle" size={14} color={COLORS.success} />
-                <Text style={styles.tipText}>{tip}</Text>
+          {/* What should I do */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>What Should I Do?</Text>
+            {ACTION_STEPS[result.status].map((step, i) => (
+              <View key={i} style={styles.actionStepRow}>
+                <View style={styles.actionStepNumber}>
+                  <Text style={styles.actionStepNumberText}>{i + 1}</Text>
+                </View>
+                <Text style={styles.actionStepText}>{step}</Text>
               </View>
             ))}
           </View>
-        </Card>
+
+          {/* Actions */}
+          <View style={styles.actions}>
+            {(result.status === 'SUSPICIOUS' || result.status === 'PHISHING') && (
+              <TouchableOpacity style={styles.reportBtn} onPress={handleReport} activeOpacity={0.8}>
+                <Feather name="flag" size={16} color={COLORS.danger} />
+                <Text style={styles.reportBtnText}>Report This Message</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={styles.resetBtn} onPress={handleReset} activeOpacity={0.8}>
+              <Feather name="refresh-cw" size={16} color={COLORS.primary} />
+              <Text style={styles.resetBtnText}>Check Another Message</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
       )}
 
-      {/* Quick Tips */}
-      <Card style={styles.tipsCard}>
-        <Text style={styles.tipsTitle}>Common Phishing Patterns</Text>
-        <View style={styles.patternsList}>
-          <View style={styles.patternItem}>
-            <Feather name="alert-triangle" size={16} color={COLORS.danger} />
-            <Text style={styles.patternText}>Urgent language ("Act now!", "Immediate action required")</Text>
+      {/* ── Static reference card (always visible) ── */}
+      <View style={styles.referenceCard}>
+        <Text style={styles.cardTitle}>Common Warning Signs</Text>
+        <Text style={styles.referenceSubtitle}>
+          Genuine messages from PSB will never do these things:
+        </Text>
+        {Object.entries(signalDefs).map(([id, def]) => (
+          <View key={id} style={styles.referenceRow}>
+            <View style={styles.referenceIconWrap}>
+              <Feather name={def.icon as any} size={14} color={COLORS.textSecondary} />
+            </View>
+            <Text style={styles.referenceText}>{def.friendlyName}</Text>
           </View>
-          <View style={styles.patternItem}>
-            <Feather name="alert-triangle" size={16} color={COLORS.danger} />
-            <Text style={styles.patternText}>Requests for sensitive information (passwords, OTP, account details)</Text>
-          </View>
-          <View style={styles.patternItem}>
-            <Feather name="alert-triangle" size={16} color={COLORS.danger} />
-            <Text style={styles.patternText}>Suspicious links or attachments</Text>
-          </View>
-          <View style={styles.patternItem}>
-            <Feather name="alert-triangle" size={16} color={COLORS.danger} />
-            <Text style={styles.patternText}>Official-looking sender with fake domain</Text>
-          </View>
-        </View>
-      </Card>
-
-      {/* Security Features */}
-      <View style={styles.featuresContainer}>
-        <Text style={styles.featuresTitle}>Security Features</Text>
-        <View style={styles.featureList}>
-          <View style={styles.featureItem}>
-            <Feather name="shield" size={20} color={COLORS.primary} />
-            <Text style={styles.featureText}>Real-time scanning</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Feather name="message-square" size={20} color={COLORS.primary} />
-            <Text style={styles.featureText}>Message analysis</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Feather name="link" size={20} color={COLORS.primary} />
-            <Text style={styles.featureText}>URL reputation checking</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Feather name="book-open" size={20} color={COLORS.primary} />
-            <Text style={styles.featureText}>Educational safety tips</Text>
-          </View>
-        </View>
+        ))}
       </View>
+
+      <View style={{ height: SPACING.xxl }} />
     </ScrollView>
   );
 };
 
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
   },
-  contentContainer: {
+  scrollContent: {
     padding: SPACING.lg,
-    paddingBottom: SPACING.xxl,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: SPACING.xl,
-  },
-  title: {
-    ...TYPOGRAPHY.h3,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  inputCard: {
+
+  // Intro card
+  introCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
     padding: SPACING.lg,
-    marginBottom: SPACING.lg,
+    marginBottom: SPACING.md,
+    ...SHADOWS.small,
   },
-  sectionTitle: {
+  introTitle: {
     ...TYPOGRAPHY.h4,
-    fontWeight: '600',
     color: COLORS.text,
-    marginBottom: SPACING.sm,
+    fontWeight: '700',
+    marginBottom: SPACING.xs,
   },
-  sectionSubtitle: {
+  introSubtitle: {
     ...TYPOGRAPHY.bodySm,
     color: COLORS.textSecondary,
+    lineHeight: 20,
     marginBottom: SPACING.md,
   },
-  textInput: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: BORDER_RADIUS.md,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.lg,
-    ...TYPOGRAPHY.body,
-    color: COLORS.text,
-    textAlignVertical: 'top',
-    height: 120,
-    marginBottom: SPACING.md,
+  exampleLabel: {
+    ...TYPOGRAPHY.label,
+    color: COLORS.textTertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: SPACING.sm,
   },
-  inputActions: {
+  exampleRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: SPACING.sm,
+    marginBottom: SPACING.md,
   },
-  pasteButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.surface,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
+  exampleChip: {
+    backgroundColor: COLORS.primaryVeryLight,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    borderWidth: 1,
+    borderColor: COLORS.primary + '20',
+  },
+  exampleChipText: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.primaryMedium,
+    fontWeight: '600',
+  },
+
+  // Input
+  textInput: {
+    backgroundColor: COLORS.surfaceLight,
     borderWidth: 1,
     borderColor: COLORS.border,
-  },
-  pasteButtonText: {
+    borderRadius: BORDER_RADIUS.lg,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
     ...TYPOGRAPHY.bodySm,
-    color: COLORS.primary,
-    fontWeight: '600',
-    marginLeft: SPACING.sm,
+    color: COLORS.text,
+    minHeight: 110,
+    marginBottom: SPACING.md,
   },
-  scanButton: {
-    flex: 2,
+  scanBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.primary,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
+    borderRadius: BORDER_RADIUS.lg,
+    paddingVertical: SPACING.md,
+    gap: SPACING.sm,
   },
-  scanButtonDisabled: {
-    backgroundColor: COLORS.textTertiary,
+  scanBtnDisabled: {
+    backgroundColor: COLORS.borderDark,
   },
-  scanButtonText: {
+  scanBtnText: {
     ...TYPOGRAPHY.button,
     color: COLORS.textOnDark,
-    marginLeft: SPACING.sm,
   },
-  resultCard: {
-    padding: SPACING.lg,
+
+  // Scanning phase
+  scanningContainer: {
+    alignItems: 'center',
+    paddingVertical: SPACING.xxl,
+  },
+  scanningIconWrap: {
+    width: 88,
+    height: 88,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.primaryVeryLight,
+    justifyContent: 'center',
+    alignItems: 'center',
     marginBottom: SPACING.lg,
+  },
+  scanningTitle: {
+    ...TYPOGRAPHY.h4,
+    color: COLORS.text,
+    fontWeight: '700',
+    marginBottom: SPACING.xs,
+  },
+  scanningStep: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+  },
+
+  // Result header card
+  resultCard: {
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.lg,
+    marginBottom: SPACING.md,
   },
   resultHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: SPACING.md,
+    gap: SPACING.md,
   },
-  resultIconContainer: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: SPACING.md,
-  },
-  resultInfo: {
+  resultHeaderText: {
     flex: 1,
   },
-  resultStatusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  resultLabel: {
+    ...TYPOGRAPHY.h4,
+    fontWeight: '700',
+    marginBottom: 2,
   },
-//   resultStatus: {
-//     ...TYPOGRAPHY.h4,
-//     fontWeight: '600',
-//     color: 
-//       scanResult?.status === 'PHISHING' ? COLORS.danger : 
-//       scanResult?.status === 'SUSPICIOUS' ? COLORS.warning : 
-//       COLORS.success,
-//   },
-  resultStatus: {
-  ...TYPOGRAPHY.h4,
-  fontWeight: '600',
-},
-  resultConfidence: {
+  resultSublabel: {
     ...TYPOGRAPHY.bodySm,
     color: COLORS.textSecondary,
-    marginTop: SPACING.xs,
+    lineHeight: 19,
   },
-  threatsContainer: {
-    marginBottom: SPACING.md,
-  },
-  threatsTitle: {
-    ...TYPOGRAPHY.bodySm,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.sm,
-  },
-  threatItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.danger + '10',
-    padding: SPACING.sm,
-    borderRadius: BORDER_RADIUS.sm,
-    marginBottom: SPACING.xs,
-  },
-  threatText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.danger,
-    marginLeft: SPACING.sm,
-  },
-  explanationContainer: {
-    marginBottom: SPACING.md,
-  },
-  explanationTitle: {
-    ...TYPOGRAPHY.bodySm,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.sm,
-  },
-  explanationText: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.text,
-    lineHeight: 20,
-  },
-  tipsContainer: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    paddingTop: SPACING.md,
-  },
-  tipsTitle: {
-    ...TYPOGRAPHY.bodySm,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.sm,
-  },
-  tipItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: SPACING.xs,
-  },
-  tipText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.success,
-    marginLeft: SPACING.sm,
-    flex: 1,
-  },
-  tipsCard: {
-    padding: SPACING.lg,
-    marginBottom: SPACING.lg,
-  },
-  patternsList: {
-    gap: SPACING.sm,
-  },
-  patternItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  patternText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.danger,
-    marginLeft: SPACING.sm,
-    flex: 1,
-  },
-  featuresContainer: {
-    marginTop: SPACING.xxl,
-  },
-  featuresTitle: {
-    ...TYPOGRAPHY.h4,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.md,
-  },
-  featureList: {
-    gap: SPACING.sm,
-  },
-  featureItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+
+  // Generic card
+  card: {
     backgroundColor: COLORS.surface,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.lg,
+    marginBottom: SPACING.md,
     ...SHADOWS.small,
   },
-  featureText: {
+  cardTitle: {
+    ...TYPOGRAPHY.bodySmMedium,
+    color: COLORS.text,
+    fontWeight: '700',
+    marginBottom: SPACING.sm,
+  },
+
+  // Signal row (What We Found)
+  signalRow: {
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
+    paddingVertical: SPACING.sm,
+  },
+  signalRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  signalIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: BORDER_RADIUS.md,
+    backgroundColor: COLORS.dangerLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  signalName: {
     ...TYPOGRAPHY.bodySm,
     color: COLORS.text,
-    marginLeft: SPACING.sm,
+    fontWeight: '600',
+    flex: 1,
+  },
+  signalExplanation: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+    marginTop: SPACING.sm,
+    marginLeft: 40,
+    lineHeight: 19,
+  },
+
+  // Action steps
+  actionStepRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  actionStepNumber: {
+    width: 22,
+    height: 22,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.primaryVeryLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+    marginTop: 1,
+  },
+  actionStepNumberText: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.primaryMedium,
+  },
+  actionStepText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.text,
+    flex: 1,
+    lineHeight: 20,
+  },
+
+  // Actions
+  actions: {
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  reportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.dangerLight,
+    borderRadius: BORDER_RADIUS.lg,
+    paddingVertical: SPACING.md,
+    gap: SPACING.sm,
+  },
+  reportBtnText: {
+    ...TYPOGRAPHY.button,
+    color: COLORS.danger,
+  },
+  resetBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
+    paddingVertical: SPACING.md,
+    gap: SPACING.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  resetBtnText: {
+    ...TYPOGRAPHY.button,
+    color: COLORS.primary,
+  },
+
+  // Reference card
+  referenceCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.lg,
+    ...SHADOWS.small,
+  },
+  referenceSubtitle: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+    marginBottom: SPACING.md,
+  },
+  referenceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  referenceIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: BORDER_RADIUS.md,
+    backgroundColor: COLORS.surfaceLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  referenceText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+    flex: 1,
   },
 });
 
