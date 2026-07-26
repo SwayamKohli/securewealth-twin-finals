@@ -1,0 +1,45 @@
+{
+  "wealth_overview": {
+    "healthy": "Based on your financial profile, you are in a strong position. Your savings discipline and low debt burden give you a solid foundation for wealth building.",
+    "moderate": "Based on your financial profile, you have a reasonable foundation but there are areas to strengthen before committing to long-term investments.",
+    "stressed": "Based on your financial profile, your current priority should be stabilising your finances. Focus on the suggestions below before thinking about growth.",
+    "suppressed_fraud": "Your investment advice is currently paused while our security team reviews your account activity. Your goal progress is shown below.",
+    "no_surplus": "Your monthly expenses currently leave no room for investing. The suggestion below can help free up funds."
+  },
+
+  "health_grades": {
+    "A": "Excellent financial health (score {score}/100). You are well-positioned to build long-term wealth.",
+    "B": "Good financial health (score {score}/100). A few areas to improve before accelerating wealth building.",
+    "C": "Moderate financial health (score {score}/100). Focus on stability — debt and emergency readiness — first.",
+    "D": "Financial health needs attention (score {score}/100). Follow the priority recommendations below before investing."
+  },
+
+  "recommendation_explanations": {
+    "emergency_fund_implicit": "Your liquid savings currently cover only a limited number of months. Before investing for growth, it is important to build a safety buffer of at least 4 months of expenses in a no-lock-in deposit. This is a globally accepted personal finance standard.",
+    "emergency_fund_goal": "You have already started building your emergency fund — well done. This recommendation helps you close the remaining gap so your safety net is complete.",
+    "expense_optimization": "Your monthly expenses currently exceed your income, leaving no room to invest or save. Reviewing your spending against the 50/30/20 rule (50% needs, 30% wants, 20% savings) is the most important step right now.",
+    "debt_reduction_stressed": "Your total loan repayments are above 50% of your monthly income, which is considered financially stressed by RBI norms. Focusing on reducing this burden will free up capacity for wealth building in the future.",
+    "debt_optimisation": "Your loan carries a high interest rate. Prepaying even a small portion each month reduces the principal faster, which cuts your total interest paid over the loan tenure — often more than an equivalent investment would earn.",
+    "fd_reinvestment": "Your fixed deposit is maturing soon. Letting it sit as idle cash means losing purchasing power to inflation. Reinvesting promptly ensures your money keeps earning.",
+    "idle_balance_fd": "You have money sitting in your savings account beyond what you need for daily expenses and emergencies. Moving a portion into a short-term fixed deposit earns significantly more interest without sacrificing access to funds.",
+    "retirement_sip": "A monthly systematic investment plan started early allows compound growth to do the heavy lifting. Even a modest amount invested regularly over many years builds a meaningful retirement corpus.",
+    "retirement_elss": "ELSS funds offer dual benefit — potential for equity-linked growth and a tax deduction under Section 80C up to Rs.1.5 lakh per year. The 3-year lock-in encourages long-term discipline.",
+    "home_purchase_sip": "A balanced fund SIP for your home purchase goal spreads your investment over time, averaging out market fluctuations. This is a sound approach for a 5-10 year horizon.",
+    "home_purchase_parallel_rd": "Building a liquid recurring deposit alongside your SIP ensures you have a separate buffer for unexpected expenses, so you never have to break your long-term investment.",
+    "education_fd": "For a short-to-medium horizon like education funding, a fixed deposit offers capital safety and predictable returns — more important than growth when the timeline is fixed.",
+    "education_sip": "A debt mutual fund SIP alongside the FD can add modest growth while keeping risk low, suitable for a 2-5 year education goal horizon.",
+    "vacation_fd": "A fixed deposit for your vacation goal keeps the corpus safe and earns interest while you save toward the target.",
+    "vacation_sip": "A debt SIP complements the FD by adding a steady growth component over the savings period.",
+    "conservative_start": "Since you have not set any specific financial goals yet, starting with a short-term liquid fixed deposit is a safe first step. It earns interest, remains accessible, and gives you time to plan.",
+    "debt_payoff_channel": "Channelling a fixed monthly amount directly toward your debt payoff goal accelerates the timeline and reduces total interest paid.",
+    "business_expansion_channel": "Setting aside a fixed monthly amount in a recurring deposit earmarks funds specifically for your business expansion goal, separate from operating cash."
+  },
+
+  "goal_feasibility": {
+    "achievable": "Based on your current surplus, this goal is well within reach.",
+    "stretch": "This goal is achievable but will require consistent discipline with your surplus.",
+    "unrealistic": "At your current savings rate, fully meeting this goal within the timeline is difficult. The recommendation still helps you make meaningful progress."
+  },
+
+  "disclaimer": "This is a simulation. All amounts and projections are estimates based on your financial data. This is not financial advice. Consult a SEBI-registered investment advisor before making any investment decision."
+}
