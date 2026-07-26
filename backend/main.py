@@ -17,7 +17,10 @@ from api.cards import router as cards_router
 from api.dashboard import router as dashboard_router
 from api.aggregation import router as aggregation_router
 
-
+# NEW: AI, Security, and Phishing API routers
+from api.ai import fraud_router, wealth_router, profile_router, explainability_router
+from api.security import risk_router, decision_router
+from api.phishing.phishing_api import router as phishing_router
 from core.config import settings
 
 
@@ -34,6 +37,7 @@ def root():
         "message": "Secure Wealth Twin Backend Running"
     }
 
+# Core API routes
 app.include_router(health_router, prefix="/api/v1")
 
 app.include_router(auth_router)
@@ -46,3 +50,12 @@ app.include_router(loans_router)
 app.include_router(cards_router)
 app.include_router(dashboard_router)
 app.include_router(aggregation_router)
+
+# NEW: AI, Security, and Phishing API routes
+app.include_router(fraud_router)
+app.include_router(wealth_router)
+app.include_router(profile_router)
+app.include_router(explainability_router)  # NEW: Add explainability routes
+app.include_router(risk_router)
+app.include_router(decision_router)
+app.include_router(phishing_router)
