@@ -1,21 +1,16 @@
 // src/screens/DashboardScreen.tsx
 // SecureWealth Twin — Home Dashboard
 //
-// Layout (top → bottom, inside ScrollView):
-//  1. Green hero section: greeting + account carousel + dots
-//  2. Quick actions row (4 items, single row)
-//  3. Protection Status card  ← replaces confusing "LOW security"
-//  4. Recent Transactions     ← flat list, scrollDisabled, inside ScrollView
-//  5. Smart Wealth Tip card   ← single insight from wealth engine
-//
-// Design decisions:
-//  - Hero bg extends to top (no white gap under the navigator green header)
-//  - Account carousel uses ScrollView + manual dot tracking (no FlatList nesting)
-//  - All risk/decision language is human-friendly per the plan
-//  - GlossaryPopup on every banking term (Net Worth, NEFT, IMPS, etc.)
-//  - Transactions capped at 5 — "View All" goes to full history (future screen)
+// BACKEND INTEGRATION (was 3 mock JSON imports):
+//  • Single source: GET /dashboard/  → user + accounts + recent_transactions + net_worth.
+//  • Backend (snake_case) is mapped to the existing component shapes so NONE of the
+//    sub-components (AccountCard, TransactionRow, etc.) changed.
+//  • Transaction `decision` is now real (ALLOW/WARN/CHALLENGE/BLOCK) → badges use it.
+//  • Removed: Primary badge (no field in API), last-login line (not in dashboard payload).
+//  • Minimal loading + error + empty states added; layout/styles otherwise unchanged.
+//  • Pull-to-refresh now re-fetches the dashboard.
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -27,6 +22,7 @@ import {
   NativeSyntheticEvent,
   NativeScrollEvent,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -41,19 +37,68 @@ import {
   ANIMATION,
 } from '../constants/theme';
 import GlossaryPopup from '../components/common/GlossaryPopup';
-
-// ── Mock data imports ─────────────────────────────────────────────────────────
-import userData from '../../mockData/user.json';
-import accountsData from '../../mockData/accounts.json';
-import transactionsData from '../../mockData/transactions.json';
+import { api, ApiError } from '../api/apiService';
+import type { AccountResponse, TransactionResponse } from '../api/types';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CARD_WIDTH = SCREEN_WIDTH - SPACING.lg * 2; // Full width minus horizontal padding
 
+// ── View-model shapes (what the UI components expect) ─────────────────────────
+// We adapt the backend payloads into these so the render code stays identical.
+interface AccountVM {
+  accountId: string;
+  bankName: string;
+  accountType: string;       // "Savings" | "Current" | "Salary" (title-case for GlossaryPopup)
+  accountNumberMasked: string;
+  balance: number;
+  isPrimary: boolean;        // always false now (no API field)
+}
+interface TransactionVM {
+  transactionId: string;
+  merchantName: string;
+  merchantCategory: string;
+  transactionTime: string;
+  channel: string;
+  amount: number;            // signed: negative = debit, positive = credit
+  decision: string | null;   // ALLOW | WARN | CHALLENGE | BLOCK | null
+}
+
+// ── Mappers: backend → view-model ─────────────────────────────────────────────
+const titleCase = (s: string): string =>
+  s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
+
+const mapAccount = (a: AccountResponse): AccountVM => ({
+  accountId: a.account_id,
+  bankName: a.bank_name,
+  accountType: titleCase(String(a.account_type)),
+  accountNumberMasked: a.account_number_masked,
+  balance: Number(a.balance) || 0,
+  isPrimary: false,
+});
+
+// The backend amount is a positive decimal. We infer credit vs debit from the
+// merchant category ("Income"/"Salary" = credit) so the existing +/- and colour
+// logic keeps working. Adjust this rule if your backend encodes direction elsewhere.
+const CREDIT_CATEGORIES = new Set(['income', 'salary', 'refund', 'credit', 'interest']);
+const mapTransaction = (t: TransactionResponse): TransactionVM => {
+  const cat = String(t.merchant_category || '').toLowerCase();
+  const isCredit = CREDIT_CATEGORIES.has(cat);
+  const magnitude = Math.abs(Number(t.amount) || 0);
+  return {
+    transactionId: t.transaction_id,
+    merchantName: t.merchant_name,
+    merchantCategory: t.merchant_category,
+    transactionTime: t.transaction_time,
+    channel: String(t.channel),
+    amount: isCredit ? magnitude : -magnitude,
+    decision: (t.decision as string) ?? null,
+  };
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const formatCurrency = (amount: number): string => {
   const abs = Math.abs(amount);
-  return '₹' + abs.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '\u20B9' + abs.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 const getGreeting = (): string => {
@@ -63,15 +108,9 @@ const getGreeting = (): string => {
   return 'Good evening';
 };
 
-const formatLastLogin = (isoString: string): string => {
-  const date = new Date(isoString);
-  return date.toLocaleString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
+const firstNameOf = (fullName: string): string => {
+  if (!fullName) return 'there';
+  return fullName.trim().split(/\s+/)[0];
 };
 
 const formatTransactionTime = (isoString: string): string => {
@@ -119,7 +158,7 @@ const getCategoryColor = (category: string): string => {
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 // Account Card — single slide in the carousel
-const AccountCard = ({ account }: { account: typeof accountsData[0] }) => {
+const AccountCard = ({ account }: { account: AccountVM }) => {
   const [balanceVisible, setBalanceVisible] = useState(true);
 
   // Color per bank
@@ -147,11 +186,7 @@ const AccountCard = ({ account }: { account: typeof accountsData[0] }) => {
             </GlossaryPopup>
           </View>
         </View>
-        {account.isPrimary && (
-          <View style={styles.primaryBadge}>
-            <Text style={styles.primaryBadgeText}>Primary</Text>
-          </View>
-        )}
+        {/* Primary badge removed — no field in API */}
       </View>
 
       {/* Masked account number */}
@@ -162,7 +197,7 @@ const AccountCard = ({ account }: { account: typeof accountsData[0] }) => {
         <View>
           <Text style={styles.balanceLabel}>Available Balance</Text>
           <Text style={styles.balanceAmount}>
-            {balanceVisible ? formatCurrency(account.balance) : '₹ ••••••'}
+            {balanceVisible ? formatCurrency(account.balance) : '\u20B9 \u2022\u2022\u2022\u2022\u2022\u2022'}
           </Text>
         </View>
         <TouchableOpacity
@@ -231,7 +266,7 @@ const ProtectionStatusCard = () => {
         </View>
         <View style={{ flex: 1, marginLeft: SPACING.sm }}>
           <Text style={styles.protectionTitle}>Your Account is Protected</Text>
-          <Text style={styles.protectionSub}>All systems active · No threats detected</Text>
+          <Text style={styles.protectionSub}>All systems active \u00B7 No threats detected</Text>
         </View>
         {/* Animated pulse dot */}
         <View style={styles.pulseDotOuter}>
@@ -270,10 +305,10 @@ const ProtectionStatusCard = () => {
 };
 
 // Transaction row
-const TransactionRow = ({ txn }: { txn: typeof transactionsData[0] }) => {
+const TransactionRow = ({ txn }: { txn: TransactionVM }) => {
   const isCredit = txn.amount > 0;
   const isBlocked = txn.decision === 'BLOCK';
-  const isWarn = txn.decision === 'WARN';
+  const isWarn = txn.decision === 'WARN' || txn.decision === 'CHALLENGE';
   const iconName = getCategoryIcon(txn.merchantCategory);
   const iconColor = isBlocked ? COLORS.danger : getCategoryColor(txn.merchantCategory);
 
@@ -323,7 +358,7 @@ const TransactionRow = ({ txn }: { txn: typeof transactionsData[0] }) => {
         ]}
       >
         {isBlocked
-          ? '—'
+          ? '\u2014'
           : `${isCredit ? '+' : '-'}${formatCurrency(txn.amount)}`}
       </Text>
     </TouchableOpacity>
@@ -353,8 +388,41 @@ const WealthTipCard = () => (
 const DashboardScreen = ({ navigation }: any) => {
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [activeCardIndex, setActiveCardIndex] = useState(0);
   const carouselRef = useRef<ScrollView>(null);
+
+  // Live data (mapped to view-model shapes)
+  const [firstName, setFirstName] = useState('there');
+  const [accounts, setAccounts] = useState<AccountVM[]>([]);
+  const [transactions, setTransactions] = useState<TransactionVM[]>([]);
+
+  const loadDashboard = useCallback(async () => {
+    setError(null);
+    try {
+      const dash = await api.getDashboard();
+      setFirstName(firstNameOf(dash.user?.full_name || ''));
+      setAccounts((dash.accounts || []).map(mapAccount));
+      setTransactions((dash.recent_transactions || []).map(mapTransaction));
+    } catch (e) {
+      const err = e as ApiError;
+      setError(
+        err instanceof ApiError && err.isNetworkError
+          ? 'Cannot reach the server. Pull down to retry.'
+          : 'Could not load your dashboard. Pull down to retry.'
+      );
+    }
+  }, []);
+
+  // Initial load
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      await loadDashboard();
+      setLoading(false);
+    })();
+  }, [loadDashboard]);
 
   const quickActions = [
     {
@@ -388,23 +456,36 @@ const DashboardScreen = ({ navigation }: any) => {
   ];
 
   // Total balance across all accounts
-  const totalBalance = accountsData.reduce((sum, acc) => sum + acc.balance, 0);
+  const totalBalance = accounts.reduce((sum, acc) => sum + acc.balance, 0);
 
   // Recent 5 transactions, most recent first
-  const recentTxns = [...transactionsData]
+  const recentTxns = [...transactions]
     .sort((a, b) => new Date(b.transactionTime).getTime() - new Date(a.transactionTime).getTime())
     .slice(0, 5);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await loadDashboard();
     setRefreshing(false);
-  }, []);
+  }, [loadDashboard]);
 
   const handleCarouselScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const index = Math.round(e.nativeEvent.contentOffset.x / CARD_WIDTH);
-    setActiveCardIndex(Math.max(0, Math.min(index, accountsData.length - 1)));
+    setActiveCardIndex(Math.max(0, Math.min(index, Math.max(0, accounts.length - 1))));
   };
+
+  // ── Initial full-screen loader ──
+  if (loading) {
+    return (
+      <>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.primaryDark} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>Loading your dashboard\u2026</Text>
+        </View>
+      </>
+    );
+  }
 
   return (
     <>
@@ -427,11 +508,9 @@ const DashboardScreen = ({ navigation }: any) => {
           <View style={styles.greetingRow}>
             <View>
               <Text style={styles.greeting}>
-                {getGreeting()}, {userData.firstName}!
+                {getGreeting()}, {firstName}!
               </Text>
-              <Text style={styles.lastLogin}>
-                Last login: {formatLastLogin(userData.lastLogin)}
-              </Text>
+              {/* last-login line removed — not in dashboard payload */}
             </View>
             {/* Total across all accounts — shown in hero */}
             <View style={styles.totalWrap}>
@@ -440,25 +519,44 @@ const DashboardScreen = ({ navigation }: any) => {
             </View>
           </View>
 
-          {/* Account card carousel */}
-          <ScrollView
-            ref={carouselRef}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            onMomentumScrollEnd={handleCarouselScroll}
-            decelerationRate="fast"
-            snapToInterval={CARD_WIDTH}
-            contentContainerStyle={styles.carouselContent}
-            style={styles.carousel}
-          >
-            {accountsData.map((account) => (
-              <AccountCard key={account.accountId} account={account} />
-            ))}
-          </ScrollView>
+          {/* Error banner (data failed but we still render the shell) */}
+          {error && (
+            <View style={styles.errorBanner}>
+              <Feather name="wifi-off" size={14} color={COLORS.textOnDark} />
+              <Text style={styles.errorBannerText}>{error}</Text>
+            </View>
+          )}
 
-          {/* Dot indicators */}
-          <CarouselDots count={accountsData.length} active={activeCardIndex} />
+          {/* Account card carousel */}
+          {accounts.length > 0 ? (
+            <>
+              <ScrollView
+                ref={carouselRef}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={handleCarouselScroll}
+                decelerationRate="fast"
+                snapToInterval={CARD_WIDTH}
+                contentContainerStyle={styles.carouselContent}
+                style={styles.carousel}
+              >
+                {accounts.map((account) => (
+                  <AccountCard key={account.accountId} account={account} />
+                ))}
+              </ScrollView>
+
+              {/* Dot indicators */}
+              <CarouselDots count={accounts.length} active={activeCardIndex} />
+            </>
+          ) : (
+            !error && (
+              <View style={styles.emptyAccounts}>
+                <Feather name="credit-card" size={22} color={COLORS.textOnDarkSub} />
+                <Text style={styles.emptyAccountsText}>No accounts linked yet</Text>
+              </View>
+            )
+          )}
         </View>
 
         {/* ── Content area (white/light background) ── */}
@@ -502,9 +600,13 @@ const DashboardScreen = ({ navigation }: any) => {
               </TouchableOpacity>
             </View>
 
-            {recentTxns.map((txn) => (
-              <TransactionRow key={txn.transactionId} txn={txn} />
-            ))}
+            {recentTxns.length > 0 ? (
+              recentTxns.map((txn) => (
+                <TransactionRow key={txn.transactionId} txn={txn} />
+              ))
+            ) : (
+              <Text style={styles.emptyTxnText}>No recent transactions.</Text>
+            )}
           </View>
 
           {/* Divider */}
@@ -529,6 +631,53 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.primaryDark, // Hero bg = same as header
+  },
+
+  // ── Loading / states ──────────────────────────────────────────────────────
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: COLORS.background,
+    gap: SPACING.md,
+  },
+  loadingText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    marginHorizontal: SPACING.lg,
+    marginBottom: SPACING.md,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: BORDER_RADIUS.md,
+  },
+  errorBannerText: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textOnDark,
+    flex: 1,
+  },
+  emptyAccounts: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.sm,
+    marginHorizontal: SPACING.lg,
+    paddingVertical: SPACING.xxl,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: BORDER_RADIUS.xl,
+  },
+  emptyAccountsText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textOnDarkSub,
+  },
+  emptyTxnText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textTertiary,
+    paddingVertical: SPACING.md,
   },
 
   // ── Hero ──────────────────────────────────────────────────────────────────
