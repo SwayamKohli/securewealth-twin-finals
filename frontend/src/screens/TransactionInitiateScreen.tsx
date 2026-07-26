@@ -1,23 +1,18 @@
 // src/screens/TransactionInitiateScreen.tsx
 // SecureWealth Twin — Send Money
 //
-// Layout:
-//  1. Trust banner (replaces pre-transaction "risk level" — makes no sense before submit)
-//  2. Transfer mode tabs: To Self / To Others / UPI ID  (PSB-style segmented control)
-//  3. From Account (tap to expand and switch accounts)
-//  4. To Account — depends on mode:
-//       - Self: pick one of your other accounts
-//       - Others: recent payees + manual account entry
-//       - UPI: recent payees (UPI) + manual UPI ID entry
-//  5. Amount — big input + quick-amount chips
-//  6. Payment Mode (IMPS/NEFT/RTGS) with info buttons — hidden for UPI mode
-//  7. Note (optional)
-//  8. Sticky "Review & Pay" footer button
-//
-// On submit, navigates to SecurityReview with a `transactionData` object.
-// The actual ALLOW/WARN/CHALLENGE/BLOCK decision is computed there via riskSimulator.
+// BACKEND INTEGRATION (was accountsData mock JSON import):
+//  • Accounts now come from GET /api/v1/accounts/ on mount.
+//  • Backend (snake_case) mapped to the existing account shape so the UI
+//    components (AccountSelector, etc.) are unchanged.
+//  • Default "From" account = first account returned (no isPrimary field in API).
+//  • Payees stay on local mock (payees.json) — no payee endpoint exists.
+//  • Screen blocks with a loader until accounts load; shows an error/empty state
+//    if the fetch fails or returns nothing.
+//  • transactionData now also carries fromAccountId + channel so SecurityReview
+//    can call the real transaction/security endpoints. UI/styles unchanged.
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -28,6 +23,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -35,19 +31,44 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import GlossaryPopup from '../components/common/GlossaryPopup';
+import { api, ApiError } from '../api/apiService';
+import type { AccountResponse } from '../api/types';
 
-import accountsData from '../../mockData/accounts.json';
 import payeesData from '../../mockData/payees.json';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type TransferMode = 'self' | 'others' | 'upi';
 type PaymentMode = 'IMPS' | 'NEFT' | 'RTGS';
 
+// Local account view-model — same shape the UI expected from the old mock JSON.
+interface AccountVM {
+  accountId: string;
+  bankName: string;
+  accountType: string;        // title-case: "Savings" | "Current" | "Salary"
+  accountNumberMasked: string;
+  balance: number;
+}
+
+// ── Mapper: backend → view-model ──────────────────────────────────────────────
+const titleCase = (s: string): string =>
+  s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
+
+const mapAccount = (a: AccountResponse): AccountVM => ({
+  accountId: a.account_id,
+  bankName: a.bank_name,
+  accountType: titleCase(String(a.account_type)),
+  accountNumberMasked: a.account_number_masked,
+  balance: Number(a.balance) || 0,
+});
+
+// Map the UI's transfer/payment mode to the API channel enum.
+const toChannel = (transferMode: TransferMode, paymentMode: PaymentMode): string => {
+  if (transferMode === 'upi') return 'UPI';
+  if (transferMode === 'self') return 'IMPS'; // self transfer uses IMPS rails
+  return paymentMode; // others → chosen IMPS/NEFT/RTGS
+};
+
 // ── Quick amount chips ────────────────────────────────────────────────────────
-// Chosen to map cleanly onto the riskSimulator's demo thresholds:
-//  500 / 1,000 / 5,000  -> ALLOW
-//  25,000               -> WARN (amount spike)
-//  50,000               -> BLOCK (round + high, with new device/night-owl story)
 const QUICK_AMOUNTS = [500, 1000, 5000, 25000, 50000];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -97,7 +118,7 @@ const AccountSelector = ({
   onSelect,
   label,
 }: {
-  accounts: typeof accountsData;
+  accounts: AccountVM[];
   selectedId: string;
   onSelect: (id: string) => void;
   label: string;
@@ -199,10 +220,13 @@ const PayeeAvatar = ({
 const TransactionInitiateScreen = ({ navigation }: any) => {
   const insets = useSafeAreaInsets();
 
+  // ── Accounts (from API) ──
+  const [accounts, setAccounts] = useState<AccountVM[]>([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+
   const [transferMode, setTransferMode] = useState<TransferMode>('others');
-  const [fromAccountId, setFromAccountId] = useState(
-    accountsData.find((a) => a.isPrimary)?.accountId || accountsData[0].accountId
-  );
+  const [fromAccountId, setFromAccountId] = useState<string>('');
   const [selfToAccountId, setSelfToAccountId] = useState<string | null>(null);
   const [selectedPayeeId, setSelectedPayeeId] = useState<string | null>(null);
   const [manualEntry, setManualEntry] = useState('');
@@ -211,8 +235,33 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const fromAccount = accountsData.find((a) => a.accountId === fromAccountId)!;
-  const selfAccounts = accountsData.filter((a) => a.accountId !== fromAccountId);
+  const loadAccounts = useCallback(async () => {
+    setAccountsError(null);
+    setLoadingAccounts(true);
+    try {
+      const list = await api.getAccounts();
+      const mapped = (list || []).map(mapAccount);
+      setAccounts(mapped);
+      // Default "From" = first account (no isPrimary field in API).
+      if (mapped.length > 0) setFromAccountId(mapped[0].accountId);
+    } catch (e) {
+      const err = e as ApiError;
+      setAccountsError(
+        err instanceof ApiError && err.isNetworkError
+          ? 'Cannot reach the server. Please try again.'
+          : 'Could not load your accounts. Please try again.'
+      );
+    } finally {
+      setLoadingAccounts(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAccounts();
+  }, [loadAccounts]);
+
+  const fromAccount = accounts.find((a) => a.accountId === fromAccountId);
+  const selfAccounts = accounts.filter((a) => a.accountId !== fromAccountId);
 
   // Reset "to" selection when switching modes
   const handleModeChange = (mode: TransferMode) => {
@@ -224,7 +273,7 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
 
   const handlePayeeSelect = (payeeId: string) => {
     setSelectedPayeeId((prev) => (prev === payeeId ? null : payeeId));
-    setManualEntry(''); // clear manual entry if a payee chip is chosen
+    setManualEntry('');
   };
 
   // Build a human-readable "to" summary + whether this is a new recipient
@@ -260,7 +309,12 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
   const numericAmount = Number(amount) || 0;
 
   const handleSubmit = () => {
-    // ── Validation ──────────────────────────────────────────────────────────
+    if (!fromAccount) {
+      Alert.alert('No account selected', 'Please choose an account to send from.');
+      return;
+    }
+    // Local const so TypeScript narrows away `undefined` for the rest of this fn.
+    const from = fromAccount;
     if (!toSummary) {
       Alert.alert('Add a recipient', 'Please choose or enter who you want to send money to.');
       return;
@@ -269,22 +323,27 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
       Alert.alert('Enter an amount', 'Please enter how much you want to send.');
       return;
     }
-    if (numericAmount > fromAccount.balance) {
+    if (numericAmount > from.balance) {
       Alert.alert(
         'Not enough balance',
-        `Your ${fromAccount.accountType} account has ${formatCurrency(fromAccount.balance)} available.`
+        `Your ${from.accountType} account has ${formatCurrency(from.balance)} available.`
       );
       return;
     }
 
     setSubmitting(true);
 
+    const channel = toChannel(transferMode, paymentMode);
+
     const transactionData = {
       amount: numericAmount,
+      // NEW: raw identifiers so SecurityReview can call the real endpoints.
+      fromAccountId: from.accountId,
+      channel,
       fromAccount: {
-        masked: fromAccount.accountNumberMasked,
-        bankName: fromAccount.bankName,
-        accountType: fromAccount.accountType,
+        masked: from.accountNumberMasked,
+        bankName: from.bankName,
+        accountType: from.accountType,
       },
       toLabel: toSummary.label,
       toDetail: toSummary.detail,
@@ -295,12 +354,43 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
       timestamp: new Date().toISOString(),
     };
 
-    // Small delay so the button shows "Reviewing..." briefly before navigating
     setTimeout(() => {
       setSubmitting(false);
       navigation.navigate('SecurityReview', { transactionData });
     }, 300);
   };
+
+  // ── Loading gate (block until accounts load) ──
+  if (loadingAccounts) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text style={styles.centerText}>Loading your accounts\u2026</Text>
+      </View>
+    );
+  }
+
+  // ── Error / empty gate ──
+  if (accountsError || accounts.length === 0) {
+    return (
+      <View style={styles.centerContainer}>
+        <Feather
+          name={accountsError ? 'wifi-off' : 'credit-card'}
+          size={28}
+          color={COLORS.textTertiary}
+        />
+        <Text style={styles.centerText}>
+          {accountsError || 'No accounts available to send from.'}
+        </Text>
+        {accountsError && (
+          <TouchableOpacity style={styles.retryBtn} onPress={loadAccounts} activeOpacity={0.8}>
+            <Feather name="refresh-cw" size={16} color={COLORS.textOnDark} />
+            <Text style={styles.retryBtnText}>Try Again</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -326,7 +416,7 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
 
         {/* From Account */}
         <AccountSelector
-          accounts={accountsData}
+          accounts={accounts}
           selectedId={fromAccountId}
           onSelect={setFromAccountId}
           label="From Account"
@@ -459,7 +549,7 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
           </View>
 
           {/* Balance hint */}
-          <Text style={styles.balanceHint}>Available: {formatCurrency(fromAccount.balance)}</Text>
+          <Text style={styles.balanceHint}>Available: {formatCurrency(fromAccount?.balance ?? 0)}</Text>
         </View>
 
         {/* Payment Mode (hidden for UPI) */}
@@ -545,6 +635,35 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: SPACING.lg,
+  },
+
+  // Loading / error / empty gate
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: COLORS.background,
+    padding: SPACING.xl,
+    gap: SPACING.md,
+  },
+  centerText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    backgroundColor: COLORS.primary,
+    borderRadius: BORDER_RADIUS.lg,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    marginTop: SPACING.sm,
+  },
+  retryBtnText: {
+    ...TYPOGRAPHY.buttonSm,
+    color: COLORS.textOnDark,
   },
 
   trustBanner: {

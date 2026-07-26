@@ -1,22 +1,15 @@
 // src/screens/PhishingScannerScreen.tsx
 // SecureWealth Twin — Check a Message
 //
-// Flow:
-//  1. User pastes/types a message or link, or taps an example chip
-//  2. "Check This Message" -> 'scanning' phase (animated magnifier + cycling text)
-//  3. -> 'result' phase, built from PHISHING_STYLES (theme.ts):
-//       SAFE       -> "Looks Safe"
-//       SUSPICIOUS -> "Be Careful"
-//       PHISHING   -> "This Looks Like a Scam"
-//     Plus collapsible "What We Found" signals and "What should I do?" steps.
-//  4. "Check Another Message" resets to idle.
-//
-// A static "Common Warning Signs" reference card stays visible below, so the
-// screen is educational even before a scan.
-//
-// When the real backend is ready: replace `analyzeMessage()` with
-// POST /phishing/scan — return shape (PhishingAssessment) should match
-// phishing_engine.py + explainability_engine.py output.
+// BACKEND INTEGRATION (was local analyzeMessage() only):
+//  • handleScan now calls POST /phishing/scan and maps the backend's
+//    phishing_score + risk_level (SAFE/LOW/MEDIUM/HIGH) + fired_signals into the
+//    existing 3-way UI status (SAFE / SUSPICIOUS / PHISHING) + signal IDs.
+//  • Falls back to the local analyzeMessage() if the API is unreachable, so the
+//    demo still works offline.
+//  • fired_signals from the backend are matched to the local signalDefs keys so
+//    the "What We Found" cards keep rendering. Unknown signal keys are ignored.
+//  • UI phases, animation, PHISHING_STYLES, and styles are unchanged.
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -34,8 +27,10 @@ import { Feather } from '@expo/vector-icons';
 
 import { COLORS } from '../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS, PHISHING_STYLES } from '../constants/theme';
-import { analyzeMessage, PhishingAssessment } from '../utils/phishingAnalyzer';
+import { analyzeMessage, PhishingAssessment, PhishingClass } from '../utils/phishingAnalyzer';
 import phishingSignalsData from '../../mockData/phishing_signals.json';
+import { api } from '../api/apiService';
+import type { PhishingScanResponse } from '../api/types';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Phase = 'idle' | 'scanning' | 'result';
@@ -69,6 +64,39 @@ const ACTION_STEPS: Record<string, string[]> = {
     'Never share your OTP, PIN, password, or card details — we will never ask for these.',
     'Report this message using the button below, then delete it.',
   ],
+};
+
+// ── Backend → UI mapping ──────────────────────────────────────────────────────
+// The backend risk_level is SAFE/LOW/MEDIUM/HIGH; the UI has 3 buckets.
+//   HIGH            → PHISHING
+//   MEDIUM | LOW    → SUSPICIOUS
+//   SAFE            → SAFE
+// We also cross-check phishing_score as a fallback if risk_level is missing.
+const mapRiskLevel = (res: PhishingScanResponse): PhishingClass => {
+  const level = String(res?.risk_level || '').toUpperCase();
+  if (level === 'HIGH') return 'PHISHING';
+  if (level === 'MEDIUM' || level === 'LOW') return 'SUSPICIOUS';
+  if (level === 'SAFE') return 'SAFE';
+  // Fallback: derive from numeric score if risk_level is absent/unknown.
+  const score = Number(res?.phishing_score) || 0;
+  if (score >= 0.7) return 'PHISHING';
+  if (score >= 0.3) return 'SUSPICIOUS';
+  return 'SAFE';
+};
+
+// Match backend fired_signals to local signalDefs keys (case-insensitive).
+// The backend may use different casing or extra signals; we keep only those we
+// can render, so the "What We Found" section stays meaningful.
+const mapSignals = (res: PhishingScanResponse): string[] => {
+  const fired = Array.isArray(res?.fired_signals) ? res.fired_signals : [];
+  const defKeys = Object.keys(signalDefs);
+  const matched: string[] = [];
+  for (const raw of fired) {
+    const key = String(raw).toUpperCase();
+    const hit = defKeys.find((k) => k.toUpperCase() === key);
+    if (hit && !matched.includes(hit)) matched.push(hit);
+  }
+  return matched;
 };
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -162,7 +190,24 @@ const PhishingScannerScreen = () => {
     setResult(null);
   };
 
-  const handleScan = () => {
+  const revealResult = (assessment: PhishingAssessment) => {
+    setResult(assessment);
+    setPhase('result');
+
+    fadeAnim.setValue(0);
+    slideAnim.setValue(12);
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 350,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const handleScan = async () => {
     if (!inputText.trim()) {
       Alert.alert('Add a message', 'Paste or type a message or link to check first.');
       return;
@@ -172,23 +217,20 @@ const PhishingScannerScreen = () => {
     setResult(null);
     setExpandedSignal(null);
 
-    setTimeout(() => {
-      const assessment = analyzeMessage(inputText);
-      setResult(assessment);
-      setPhase('result');
+    const startedAt = Date.now();
+    const MIN_SCAN_MS = 1400; // keep the reassuring animation duration
+    const finish = (assessment: PhishingAssessment) => {
+      const wait = Math.max(0, MIN_SCAN_MS - (Date.now() - startedAt));
+      setTimeout(() => revealResult(assessment), wait);
+    };
 
-      fadeAnim.setValue(0);
-      slideAnim.setValue(12);
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 350,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }, 1400);
+    try {
+      const res = await api.scanPhishing({ message: inputText.trim() });
+      finish({ status: mapRiskLevel(res), signalIds: mapSignals(res) });
+    } catch (e) {
+      // Offline / API failure → deterministic local analysis so the demo continues.
+      finish(analyzeMessage(inputText));
+    }
   };
 
   const handleReset = () => {

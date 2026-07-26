@@ -1,45 +1,57 @@
 // src/screens/WealthOverviewScreen.tsx
 // SecureWealth Twin — My Wealth
 //
-// Strictly scoped to the blueprint's Finals MVP Wealth Intelligence Layer:
-//   - Net Worth Analysis        (Assets - Liabilities)
-//   - Cash Flow Analysis        (Income / Expenses / Savings)
-//   - Goal-Based Recommendations (Emergency Fund, FD, RD, SIP only)
-//   - Explainable Recommendations (Why / How sure / Expected benefit)
+// BACKEND INTEGRATION (was mockData/*.json only) — using the real
+// src/api/apiService.ts + src/api/types.ts:
+//  • Net Worth      -> api.getNetWorth()              GET /api/v1/aggregation/net-worth
+//  • Cash Flow      -> api.getCashflow()               GET /api/v1/aggregation/cashflow
+//  • My Deposits    -> api.getDeposits()                GET /api/v1/deposits/
+//  • My Loans       -> api.getLoans()                   GET /api/v1/loans/
+//  • Smart Recs     -> api.getWealthRecommendations()   POST /api/v1/ai/wealth/recommendations
+//                      (profile_data built from accounts/deposits/loans/cashflow
+//                       fetched above; fraud_probability defaults to 0.0 since
+//                       no live fraud signal feeds this screen)
 //
-// Explicitly OUT of scope (per blueprint section 8 "Explicitly Out Of Scope"):
-//   Stock Picking, Tax Optimization, Mutual Fund Ranking, Insurance Advisory,
-//   Credit Card Recommendation Engine, Goal Tracking (house/education/retirement
-//   — goal_tracking table is a "Future Expansion Table, Not Finals").
+// Scope is unchanged from the mock version — strictly the blueprint's Finals
+// MVP Wealth Intelligence Layer (Net Worth, Cash Flow, Deposits, Loans,
+// Goal-Based Recommendations for Emergency Fund / FD / RD / SIP only).
 //
-// Layout (single scroll, no tabs — consistent with Dashboard's section pattern):
-//   1. Hero (green): Net Worth + Assets/Liabilities pills
-//   2. Cash Flow card: stacked bar (Income -> Expenses + Savings)
-//   3. My Deposits: FD/RD cards with maturity progress
-//   4. My Loans: EMI cards with repayment progress
-//   5. Smart Recommendations: Emergency Fund / FD / RD / SIP cards
+// TYPE GAPS (flagged, not silently guessed away):
+//  • types.ts's DepositResponse has no `current_value` or
+//    `monthly_installment` field — only principal/interest_rate/dates. We
+//    derive an approximate current value from simple growth over elapsed
+//    term, and RDs show the principal as a lump label since there's no
+//    monthly-installment field to read. Replace `depositCurrentValue()` with
+//    a straight passthrough once/if the backend adds `current_value`.
+//  • LoanResponse has no `original_amount` or `institution`. Without an
+//    original amount we cannot compute "% paid off", so that progress bar
+//    is omitted entirely rather than showing a fake number. Institution is
+//    likewise omitted from the loan card header.
+//  • WealthRecommendationsResponse.recommendations is typed `unknown[]` in
+//    types.ts (backend shape not pinned down yet). normalizeRec() reads a
+//    superset of expected field names (snake_case + camelCase) defensively.
 //
-// Terminology: "Confidence: 87%" is replaced with a friendly "How sure are we"
-// badge (Very likely to help / Likely to help / Worth considering). Banking
-// terms (FD, RD, SIP, EMI, Net Worth) keep their names but get a ? info icon
-// (placeholder Alert until GlossaryPopup is built in Batch 6).
+// Loading / error handling: sections fetch in parallel; a failing
+// recommendations call doesn't block Net Worth / Deposits / Loans from
+// rendering. Pull-to-refresh re-fetches everything.
 
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 import { COLORS } from '../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import GlossaryPopup from '../components/common/GlossaryPopup';
-
-import accountsData from '../../mockData/accounts.json';
-import depositsData from '../../mockData/deposits.json';
-import loansData from '../../mockData/loans.json';
-import transactionsData from '../../mockData/transactions.json';
-import recommendationsData from '../../mockData/recommendations.json';
+import { api, ApiError } from '../api/apiService';
+import type {
+  DepositResponse,
+  LoanResponse,
+  NetWorthResponse,
+  CashflowResponse,
+} from '../api/types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const formatCurrency = (n: number) => '\u20B9' + Math.round(n).toLocaleString('en-IN');
+const formatCurrency = (n: number) => '\u20B9' + Math.round(n || 0).toLocaleString('en-IN');
 
 const daysUntil = (dateStr: string): number => {
   const diff = new Date(dateStr).getTime() - Date.now();
@@ -62,10 +74,11 @@ const depositProgress = (start: string, maturity: string): number => {
   return Math.min(100, Math.max(0, ((now - s) / (m - s)) * 100));
 };
 
-// Repayment progress for a loan
-const loanProgress = (original: number, outstanding: number): number => {
-  if (original <= 0) return 0;
-  return Math.min(100, Math.max(0, ((original - outstanding) / original) * 100));
+// FALLBACK: DepositResponse has no current_value field. Approximate simple
+// growth from principal using elapsed fraction of term and interest_rate.
+const depositCurrentValue = (d: DepositResponse): number => {
+  const progressFrac = depositProgress(d.start_date, d.maturity_date) / 100;
+  return d.principal * (1 + (d.interest_rate / 100) * progressFrac);
 };
 
 // Friendly framing for recommendation confidence — replaces "Confidence: 87%"
@@ -87,45 +100,69 @@ const TYPE_META: Record<string, { glossaryKey: string; chipLabel: string }> = {
   SIP: { glossaryKey: 'SIP', chipLabel: 'SIP' },
 };
 
+// recommendations is `unknown[]` in types.ts — read defensively across both
+// snake_case (documented) and camelCase (in case the serializer differs).
+type NormalizedRec = {
+  id: string;
+  type: string;
+  title: string;
+  icon: string;
+  text: string;
+  confidence: number;
+  benefit: string;
+  reason: string;
+};
+
+const normalizeRec = (raw: unknown, index: number): NormalizedRec => {
+  const rec = (raw || {}) as Record<string, any>;
+  return {
+    id: rec.recommendation_id || rec.recommendationId || `${rec.title || 'rec'}-${index}`,
+    type: rec.recommendation_type || rec.recommendationType || 'Emergency Fund',
+    title: rec.title || 'Recommendation',
+    icon: rec.icon || 'gift',
+    text: rec.recommendation_text || rec.recommendationText || '',
+    confidence: rec.confidence_score ?? rec.confidenceScore ?? 70,
+    benefit: rec.expected_benefit || rec.expectedBenefit || '',
+    reason: rec.reason || '',
+  };
+};
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-// Deposit card (FD / RD)
-const DepositCard = ({ deposit }: { deposit: typeof depositsData[0] }) => {
-  const progress = depositProgress(deposit.startDate, deposit.maturityDate);
-  const remainingDays = daysUntil(deposit.maturityDate);
-  const isFD = deposit.depositType === 'FD';
+const DepositCard = ({ deposit }: { deposit: DepositResponse }) => {
+  const currentValue = depositCurrentValue(deposit);
+  const progress = depositProgress(deposit.start_date, deposit.maturity_date);
+  const remainingDays = daysUntil(deposit.maturity_date);
+  const isFD = deposit.deposit_type === 'FD';
 
   return (
     <View style={styles.depositCard}>
       <View style={styles.depositHeader}>
         <View style={styles.depositTypeRow}>
           <View style={[styles.typeChip, { backgroundColor: COLORS.primaryVeryLight }]}>
-            <Text style={styles.typeChipText}>{deposit.depositType}</Text>
+            <Text style={styles.typeChipText}>{deposit.deposit_type}</Text>
           </View>
-          <GlossaryPopup term={deposit.depositType as any} />
+          <GlossaryPopup term={deposit.deposit_type as any} />
         </View>
         <Text style={styles.depositInstitution}>{deposit.institution}</Text>
       </View>
 
       <View style={styles.depositValueRow}>
         <View>
-          <Text style={styles.depositValueLabel}>Current Value</Text>
-          <Text style={styles.depositValue}>{formatCurrency(deposit.currentValue)}</Text>
+          <Text style={styles.depositValueLabel}>Current Value (est.)</Text>
+          <Text style={styles.depositValue}>{formatCurrency(currentValue)}</Text>
         </View>
         <View style={styles.depositRateChip}>
-          <Text style={styles.depositRateText}>{deposit.interestRate}% p.a.</Text>
+          <Text style={styles.depositRateText}>{deposit.interest_rate}% p.a.</Text>
         </View>
       </View>
 
-      {/* Maturity progress */}
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: COLORS.primary }]} />
       </View>
       <View style={styles.depositFooterRow}>
         <Text style={styles.depositFooterText}>
-          {isFD
-            ? `Started with ${formatCurrency(deposit.principal)}`
-            : `${formatCurrency(deposit.monthlyInstallment || 0)}/month`}
+          {isFD ? `Started with ${formatCurrency(deposit.principal)}` : `Principal ${formatCurrency(deposit.principal)}`}
         </Text>
         <Text style={styles.depositFooterText}>
           {remainingDays > 0 ? `Matures in ${formatDuration(remainingDays)}` : 'Matured'}
@@ -135,26 +172,22 @@ const DepositCard = ({ deposit }: { deposit: typeof depositsData[0] }) => {
   );
 };
 
-// Loan card
-const LoanCard = ({ loan }: { loan: typeof loansData[0] }) => {
-  const progress = loanProgress(loan.originalAmount, loan.outstandingAmount);
-
+const LoanCard = ({ loan }: { loan: LoanResponse }) => {
   return (
     <View style={styles.depositCard}>
       <View style={styles.depositHeader}>
         <View style={styles.depositTypeRow}>
           <View style={[styles.typeChip, { backgroundColor: COLORS.dangerLight }]}>
-            <Text style={[styles.typeChipText, { color: COLORS.danger }]}>{loan.loanType} Loan</Text>
+            <Text style={[styles.typeChipText, { color: COLORS.danger }]}>{loan.loan_type} Loan</Text>
           </View>
         </View>
-        <Text style={styles.depositInstitution}>{loan.institution}</Text>
       </View>
 
       <View style={styles.depositValueRow}>
         <View>
           <Text style={styles.depositValueLabel}>Outstanding Amount</Text>
           <Text style={[styles.depositValue, { color: COLORS.text }]}>
-            {formatCurrency(loan.outstandingAmount)}
+            {formatCurrency(loan.outstanding_amount)}
           </Text>
         </View>
         <View style={styles.emiChip}>
@@ -167,32 +200,28 @@ const LoanCard = ({ loan }: { loan: typeof loansData[0] }) => {
         </View>
       </View>
 
-      {/* Repayment progress */}
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: COLORS.success }]} />
-      </View>
+      {/* No original_amount from backend -> no "% paid off" progress bar (see header note) */}
       <View style={styles.depositFooterRow}>
-        <Text style={styles.depositFooterText}>{Math.round(progress)}% paid off</Text>
+        <Text style={styles.depositFooterText}>{loan.interest_rate}% interest</Text>
         <Text style={styles.depositFooterText}>
-          {loan.remainingTenureMonths} month{loan.remainingTenureMonths === 1 ? '' : 's'} left
+          {loan.remaining_tenure} month{loan.remaining_tenure === 1 ? '' : 's'} left
         </Text>
       </View>
     </View>
   );
 };
 
-// Recommendation card
 const RecommendationCard = ({
   rec,
   expanded,
   onToggle,
 }: {
-  rec: typeof recommendationsData[0];
+  rec: NormalizedRec;
   expanded: boolean;
   onToggle: () => void;
 }) => {
-  const confidence = getConfidenceInfo(rec.confidenceScore);
-  const meta = TYPE_META[rec.recommendationType] || { glossaryKey: '', chipLabel: rec.recommendationType };
+  const confidence = getConfidenceInfo(rec.confidence);
+  const meta = TYPE_META[rec.type] || { glossaryKey: '', chipLabel: rec.type };
 
   return (
     <View style={styles.recCard}>
@@ -206,28 +235,23 @@ const RecommendationCard = ({
             <View style={styles.recTypeChip}>
               <Text style={styles.recTypeChipText}>{meta.chipLabel}</Text>
             </View>
-            {meta.glossaryKey ? (
-              <GlossaryPopup term={meta.glossaryKey as any} />
-            ) : null}
+            {meta.glossaryKey ? <GlossaryPopup term={meta.glossaryKey as any} /> : null}
           </View>
         </View>
       </View>
 
-      <Text style={styles.recText}>{rec.recommendationText}</Text>
+      <Text style={styles.recText}>{rec.text}</Text>
 
-      {/* How sure are we */}
       <View style={[styles.confidenceBadge, { backgroundColor: confidence.bg }]}>
         <Feather name="compass" size={13} color={confidence.color} />
         <Text style={[styles.confidenceText, { color: confidence.color }]}>{confidence.label}</Text>
       </View>
 
-      {/* Expected benefit — always visible */}
       <View style={styles.benefitRow}>
         <Feather name="gift" size={14} color={COLORS.success} />
-        <Text style={styles.benefitText}>{rec.expectedBenefit}</Text>
+        <Text style={styles.benefitText}>{rec.benefit}</Text>
       </View>
 
-      {/* Why — expandable */}
       <TouchableOpacity style={styles.whyRow} onPress={onToggle} activeOpacity={0.7}>
         <Text style={styles.whyLabel}>Why are we suggesting this?</Text>
         <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.textTertiary} />
@@ -239,31 +263,133 @@ const RecommendationCard = ({
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 const WealthOverviewScreen = () => {
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [deposits, setDeposits] = useState<DepositResponse[]>([]);
+  const [loans, setLoans] = useState<LoanResponse[]>([]);
+  const [netWorth, setNetWorth] = useState<NetWorthResponse | null>(null);
+  const [cashflow, setCashflow] = useState<CashflowResponse | null>(null);
+  const [recommendations, setRecommendations] = useState<NormalizedRec[]>([]);
+  const [recsError, setRecsError] = useState(false);
+  const [suppressedNote, setSuppressedNote] = useState<string | null>(null);
+
   const [expandedRecId, setExpandedRecId] = useState<string | null>(null);
 
-  // ── Net Worth calculation (data-driven, backend-ready) ──────────────────────
-  const totalAccountBalance = accountsData.reduce((sum, a) => sum + a.balance, 0);
-  const totalDepositValue = depositsData.reduce((sum, d) => sum + d.currentValue, 0);
-  const totalAssets = totalAccountBalance + totalDepositValue;
-  const totalLiabilities = loansData.reduce((sum, l) => sum + l.outstandingAmount, 0);
-  const netWorth = totalAssets - totalLiabilities;
+  const loadAll = useCallback(async () => {
+    setError(null);
+    setRecsError(false);
+    setSuppressedNote(null);
+    try {
+      const [accountsRes, depositsRes, loansRes, netWorthRes, cashflowRes] = await Promise.all([
+        api.getAccounts(),
+        api.getDeposits(),
+        api.getLoans(),
+        api.getNetWorth(),
+        api.getCashflow(),
+      ]);
+      setDeposits(depositsRes);
+      setLoans(loansRes);
+      setNetWorth(netWorthRes);
+      setCashflow(cashflowRes);
 
-  // ── Cash flow calculation ────────────────────────────────────────────────────
-  // Exclude BLOCKED transactions — money never left the account, so it
-  // shouldn't count against (or for) the user's cash flow.
-  const nonBlocked = transactionsData.filter((t) => t.decision !== 'BLOCK');
-  const income = nonBlocked.filter((t) => t.amount > 0).reduce((sum, t) => sum + t.amount, 0);
-  const expenses = nonBlocked
-    .filter((t) => t.amount < 0)
-    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  const savings = income - expenses;
-  const savingsRate = income > 0 ? Math.round((savings / income) * 100) : 0;
+      // Recommendations depend on the profile built from the above — fetch
+      // separately so a failure here doesn't blank the rest of the screen.
+      try {
+        const profileData: Record<string, unknown> = {
+          accounts: accountsRes,
+          deposits: depositsRes,
+          loans: loansRes,
+          net_worth: netWorthRes,
+          cashflow: cashflowRes,
+        };
+        const recRes = await api.getWealthRecommendations({
+          profile_data: profileData,
+          fraud_probability: 0.0,
+        });
+        if (recRes.suppressed) {
+          setSuppressedNote(recRes.disclaimer || 'Recommendations are paused for your account right now.');
+          setRecommendations([]);
+        } else {
+          setRecommendations((recRes.recommendations || []).map(normalizeRec));
+        }
+      } catch {
+        setRecsError(true);
+        setRecommendations([]);
+      }
+    } catch (e) {
+      const msg =
+        e instanceof ApiError
+          ? e.isNetworkError
+            ? 'Cannot reach the server. Check your connection and try again.'
+            : e.message
+          : 'Could not load your wealth data. Pull down to try again.';
+      setError(msg);
+    }
+  }, []);
 
-  const expensesPct = income > 0 ? Math.min(100, (expenses / income) * 100) : 0;
-  const savingsPct = income > 0 ? Math.max(0, 100 - expensesPct) : 0;
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      await loadAll();
+      setLoading(false);
+    })();
+  }, [loadAll]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadAll();
+    setRefreshing(false);
+  };
+
+  const savingsRate =
+    cashflow && cashflow.total_income > 0
+      ? Math.round((cashflow.net_cashflow / cashflow.total_income) * 100)
+      : 0;
+  const expensesPct =
+    cashflow && cashflow.total_income > 0
+      ? Math.min(100, (cashflow.total_expenses / cashflow.total_income) * 100)
+      : 0;
+  const savingsPct = cashflow && cashflow.total_income > 0 ? Math.max(0, 100 - expensesPct) : 0;
+
+  if (loading) {
+    return (
+      <View style={styles.loadingRoot}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text style={styles.loadingText}>Loading your wealth overview…</Text>
+      </View>
+    );
+  }
+
+  if (error && !netWorth) {
+    return (
+      <View style={styles.loadingRoot}>
+        <Feather name="alert-triangle" size={28} color={COLORS.danger} />
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity
+          style={styles.retryBtn}
+          onPress={async () => {
+            setLoading(true);
+            await loadAll();
+            setLoading(false);
+          }}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.retryBtnText}>Try Again</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={styles.container}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={COLORS.textOnDark} />
+      }
+    >
       {/* ── Hero: Net Worth ── */}
       <View style={styles.hero}>
         <View style={styles.netWorthLabelRow}>
@@ -272,21 +398,21 @@ const WealthOverviewScreen = () => {
             <Feather name="help-circle" size={14} color={COLORS.textOnDarkSub} />
           </GlossaryPopup>
         </View>
-        <Text style={styles.netWorthValue}>{formatCurrency(netWorth)}</Text>
+        <Text style={styles.netWorthValue}>{formatCurrency(netWorth?.net_worth || 0)}</Text>
 
         <View style={styles.assetLiabilityRow}>
           <View style={styles.assetLiabilityPill}>
             <Feather name="arrow-up-circle" size={14} color={COLORS.textOnDark} />
             <View>
               <Text style={styles.pillLabel}>What you own</Text>
-              <Text style={styles.pillValue}>{formatCurrency(totalAssets)}</Text>
+              <Text style={styles.pillValue}>{formatCurrency(netWorth?.total_assets || 0)}</Text>
             </View>
           </View>
           <View style={styles.assetLiabilityPill}>
             <Feather name="arrow-down-circle" size={14} color={COLORS.textOnDark} />
             <View>
               <Text style={styles.pillLabel}>What you owe</Text>
-              <Text style={styles.pillValue}>{formatCurrency(totalLiabilities)}</Text>
+              <Text style={styles.pillValue}>{formatCurrency(netWorth?.total_liabilities || 0)}</Text>
             </View>
           </View>
         </View>
@@ -299,7 +425,6 @@ const WealthOverviewScreen = () => {
           <Text style={styles.sectionTitle}>This Month's Cash Flow</Text>
 
           <View style={styles.cashFlowCard}>
-            {/* Stacked bar: expenses + savings, out of income */}
             <View style={styles.cashFlowBar}>
               <View style={[styles.cashFlowBarSegment, { flex: expensesPct, backgroundColor: COLORS.danger }]} />
               <View style={[styles.cashFlowBarSegment, { flex: savingsPct, backgroundColor: COLORS.accent }]} />
@@ -310,21 +435,21 @@ const WealthOverviewScreen = () => {
                 <View style={[styles.cashFlowDot, { backgroundColor: COLORS.success }]} />
                 <Text style={styles.cashFlowStatLabel}>Income</Text>
                 <Text style={[styles.cashFlowStatValue, { color: COLORS.success }]}>
-                  {formatCurrency(income)}
+                  {formatCurrency(cashflow?.total_income || 0)}
                 </Text>
               </View>
               <View style={styles.cashFlowStat}>
                 <View style={[styles.cashFlowDot, { backgroundColor: COLORS.danger }]} />
                 <Text style={styles.cashFlowStatLabel}>Expenses</Text>
                 <Text style={[styles.cashFlowStatValue, { color: COLORS.danger }]}>
-                  {formatCurrency(expenses)}
+                  {formatCurrency(cashflow?.total_expenses || 0)}
                 </Text>
               </View>
               <View style={styles.cashFlowStat}>
                 <View style={[styles.cashFlowDot, { backgroundColor: COLORS.accent }]} />
                 <Text style={styles.cashFlowStatLabel}>Savings</Text>
                 <Text style={[styles.cashFlowStatValue, { color: COLORS.accentDark }]}>
-                  {formatCurrency(savings)}
+                  {formatCurrency(cashflow?.net_cashflow || 0)}
                 </Text>
               </View>
             </View>
@@ -343,9 +468,11 @@ const WealthOverviewScreen = () => {
         {/* My Deposits */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>My Deposits</Text>
-          {depositsData.map((deposit) => (
-            <DepositCard key={deposit.depositId} deposit={deposit} />
-          ))}
+          {deposits.length === 0 ? (
+            <Text style={styles.emptyText}>No deposits linked yet.</Text>
+          ) : (
+            deposits.map((deposit) => <DepositCard key={deposit.deposit_id} deposit={deposit} />)
+          )}
         </View>
 
         <View style={styles.sectionDivider} />
@@ -353,9 +480,11 @@ const WealthOverviewScreen = () => {
         {/* My Loans */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>My Loans</Text>
-          {loansData.map((loan) => (
-            <LoanCard key={loan.loanId} loan={loan} />
-          ))}
+          {loans.length === 0 ? (
+            <Text style={styles.emptyText}>No loans linked — nothing owed here.</Text>
+          ) : (
+            loans.map((loan) => <LoanCard key={loan.loan_id} loan={loan} />)
+          )}
         </View>
 
         <View style={styles.sectionDivider} />
@@ -367,14 +496,22 @@ const WealthOverviewScreen = () => {
             A few ideas based on your accounts, deposits, and spending
           </Text>
 
-          {recommendationsData.map((rec) => (
+          {suppressedNote && <Text style={styles.emptyText}>{suppressedNote}</Text>}
+          {recsError && (
+            <Text style={styles.emptyText}>
+              We couldn't load personalized recommendations right now. Pull down to refresh.
+            </Text>
+          )}
+          {!suppressedNote && !recsError && recommendations.length === 0 && (
+            <Text style={styles.emptyText}>No recommendations yet — check back after a bit more activity.</Text>
+          )}
+
+          {recommendations.map((rec) => (
             <RecommendationCard
-              key={rec.recommendationId}
+              key={rec.id}
               rec={rec}
-              expanded={expandedRecId === rec.recommendationId}
-              onToggle={() =>
-                setExpandedRecId((prev) => (prev === rec.recommendationId ? null : rec.recommendationId))
-              }
+              expanded={expandedRecId === rec.id}
+              onToggle={() => setExpandedRecId((prev) => (prev === rec.id ? null : rec.id))}
             />
           ))}
         </View>
@@ -390,6 +527,39 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.primaryDark,
+  },
+  loadingRoot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.background,
+    padding: SPACING.lg,
+    gap: SPACING.sm,
+  },
+  loadingText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+  },
+  errorText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+  },
+  retryBtn: {
+    backgroundColor: COLORS.primary,
+    borderRadius: BORDER_RADIUS.lg,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    marginTop: SPACING.sm,
+  },
+  retryBtnText: {
+    ...TYPOGRAPHY.button,
+    color: COLORS.textOnDark,
+  },
+  emptyText: {
+    ...TYPOGRAPHY.bodySm,
+    color: COLORS.textTertiary,
+    marginTop: SPACING.sm,
   },
 
   // Hero

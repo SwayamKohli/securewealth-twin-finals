@@ -1,18 +1,13 @@
 // src/screens/TransactionResultScreen.tsx
 // SecureWealth Twin — Payment Receipt
 //
-// Final screen after SecurityReview. Receives { transactionData, assessment }.
+// BACKEND INTEGRATION (minimal):
+//  • If SecurityReview initiated a real transaction, its transaction_id is used
+//    as the Reference ID. Otherwise we fall back to a generated PSB reference,
+//    so the screen still works if no real txn was created.
+//  • Everything else (copy, layout, navigation) is unchanged.
 //
-// Decision -> receipt title mapping:
-//   ALLOW     -> "Payment Successful"
-//   WARN      -> "Payment Sent"             (still successful, just flagged)
-//   CHALLENGE -> "Payment Verified & Sent"
-//   BLOCK     -> "Payment Stopped"          (defensive fallback — SecurityReview
-//                                             normally terminates BLOCK before
-//                                             reaching this screen)
-//
-// "Done" navigates back to Home (resets the Send stack first so the next visit
-// to Send Money starts fresh). "Send Another" just resets the Send stack.
+// Receives { transactionData, assessment }. assessment.transactionId may be set.
 
 import React, { useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
@@ -80,8 +75,9 @@ const TransactionResultScreen = ({ route, navigation }: any) => {
   const { transactionData, assessment } = route.params;
   const insets = useSafeAreaInsets();
 
-  // Stable reference ID for this receipt (generated once)
-  const referenceId = useRef(generateReferenceId()).current;
+  // Reference ID: prefer the real backend transaction_id, else a generated one.
+  const generatedRef = useRef(generateReferenceId()).current;
+  const referenceId = assessment?.transactionId || generatedRef;
   const completedAt = useRef(new Date().toISOString()).current;
 
   const decision = assessment.decision as 'ALLOW' | 'WARN' | 'CHALLENGE' | 'BLOCK';

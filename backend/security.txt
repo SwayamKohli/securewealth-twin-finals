@@ -1,0 +1,20 @@
+# SecureWealth Twin - Vishwas Security Modules
+# =============================================
+# ZERO third-party packages. Python 3.8+ standard library only.
+#   (dataclasses, datetime, typing, unittest)
+#
+# The 6 Vishwas modules per the execution plan:
+#   security_rules.py          MODULE 6 - Security Rules Registry
+#   risk_engine.py             MODULE 1 - Risk Evaluation Engine
+#   decision_engine.py         MODULE 2 - Decision Engine
+#   behavior_engine.py         MODULE 3 - Behavior Analysis Engine
+#   challenge_engine.py        MODULE 4 - Challenge Engine
+#   unknown_risk_handler.py    MODULE 5 - Unknown Risk Handler
+#
+# Run:
+#   python decision_engine.py        # full demo (5 personas, all 4 states)
+#   python behavior_engine.py        # boolean signals self-test
+#   python risk_engine.py            # risk_score + security_signals self-test
+#   python challenge_engine.py       # challenge type self-test
+#   python unknown_risk_handler.py   # severity -> WARN/CHALLENGE/BLOCK self-test
+#   python test_security.py          # 25 unit tests across all 6 modules

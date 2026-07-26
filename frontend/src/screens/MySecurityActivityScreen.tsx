@@ -1,6 +1,23 @@
 // src/screens/MySecurityActivityScreen.tsx
 // SecureWealth Twin — My Security Activity (User-facing)
 //
+// ⚠️ BACKEND FLAG: The Master API Documentation (Finals Architecture Freeze v2)
+// has no user-facing audit/activity endpoint — only the internal decision
+// (/security/decision/make) and explainability endpoints, which return
+// single-event objects, not a listable history. There is nothing like
+// GET /audit/me or GET /users/me/activity to page through.
+//
+// Until that endpoint exists, this screen stays on mockData/audit_logs.json
+// unchanged. When it's added, swap the two lines below:
+//   import auditLogsData from '../../mockData/audit_logs.json';
+//   const activities = [...auditLogsData]...
+// for something like:
+//   const logs = await api.getMyActivity();   // new endpoint, TBD shape
+//   const activities = logs.map(translateLog);
+// translateLog() already expects the same auditId/timestamp/eventType/
+// eventDetails/integrityStatus shape as audit_logs.json, so a real backend
+// response with matching fields should need no further changes here.
+//
 // Shows the current user's own security events in plain English.
 // This is NOT the admin AuditDashboard — it shows user-friendly descriptions
 // of what happened to their account, not raw technical audit fields.
