@@ -1,17 +1,13 @@
 // src/screens/AuthScreen.tsx
 // SecureWealth Twin — Login Screen
 //
-// Fixes from original:
-//  1. RiskBadge removed from login screen — user hasn't authenticated yet,
-//     showing a risk level here is meaningless and confusing.
-//  2. 6 separate TextInput boxes replaced with a single hidden TextInput +
-//     6 display dots. Per-digit inputs don't auto-advance reliably on mobile.
-//  3. mpinHelp had flexDirection:'row' on a Text component — invalid, moved
-//     to a wrapping View.
-//  4. Demo hint card kept but styled clearly as a dev/demo note, not a real
-//     banking instruction.
-//  5. Layout redesigned: green hero at top (branding), white card below
-//     (login form) — matches the PSB UniC reference images from the plan.
+// BACKEND INTEGRATION (was mock MOCK_MPIN local check):
+//  • handleLogin now calls api.login({ phone, mpin }) which persists the JWT.
+//  • Added a phone number input above the MPIN dots (required by the API).
+//  • MPIN is now 6 digits (backend spec) — dots + hidden input updated.
+//  • Biometric button now performs a real login using the entered phone +
+//    a demo MPIN fallback (still a convenience path, but hits the API).
+//  • Minimal loading/error handling; UI/styles otherwise unchanged.
 
 import React, { useRef, useState } from 'react';
 import {
@@ -29,49 +25,78 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import GlossaryPopup from '../components/common/GlossaryPopup';
+import { api, ApiError } from '../api/apiService';
 
 interface AuthScreenProps {
   onLoginSuccess: (success: boolean) => void;
 }
 
-// Demo credentials — displayed clearly as dev note
-const MOCK_MPIN = '1234';
+// Demo credentials — used as a convenience fallback for the Biometric button.
+const DEMO_PHONE = '9999999999';
+const DEMO_MPIN = '123456';
+const MPIN_LENGTH = 6;
 
 const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
   const insets = useSafeAreaInsets();
+  const [phone, setPhone] = useState('');
   const [mpin, setMpin] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const inputRef = useRef<TextInput>(null);
 
+  const handlePhoneChange = (text: string) => {
+    // Keep digits only, allow up to 15 (API accepts 10-15).
+    setPhone(text.replace(/[^\d]/g, '').slice(0, 15));
+  };
+
   const handleMpinChange = (text: string) => {
-    const digits = text.replace(/[^\d]/g, '').slice(0, 4);
+    const digits = text.replace(/[^\d]/g, '').slice(0, MPIN_LENGTH);
     setMpin(digits);
   };
 
-  const handleLogin = async () => {
-    if (mpin.length !== 4) {
-      Alert.alert('Enter your MPIN', 'Please enter your 4-digit MPIN to continue.');
-      return;
-    }
-    if (mpin !== MOCK_MPIN) {
-      Alert.alert(
-        'Incorrect MPIN',
-        'That MPIN does not match. Please try again.\n\nDemo hint: use 1234',
-        [{ text: 'Try Again', onPress: () => setMpin('') }]
-      );
-      return;
-    }
+  // Shared login routine used by both the MPIN button and biometric fallback.
+  const doLogin = async (loginPhone: string, loginMpin: string) => {
     setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 900));
-    setIsLoading(false);
-    onLoginSuccess(true);
+    try {
+      await api.login({ phone: loginPhone, mpin: loginMpin });
+      onLoginSuccess(true);
+    } catch (e) {
+      const err = e as ApiError;
+      let title = 'Login Failed';
+      let message = 'Something went wrong. Please try again.';
+      if (err instanceof ApiError) {
+        if (err.isNetworkError) {
+          title = 'Connection Problem';
+          message = err.message;
+        } else if (err.status === 401 || err.status === 400) {
+          title = 'Incorrect Details';
+          message = 'Your phone number or MPIN is incorrect. Please try again.';
+        } else {
+          message = err.message;
+        }
+      }
+      Alert.alert(title, message, [{ text: 'Try Again', onPress: () => setMpin('') }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogin = async () => {
+    if (phone.length < 10) {
+      Alert.alert('Enter your phone number', 'Please enter your registered phone number.');
+      return;
+    }
+    if (mpin.length !== MPIN_LENGTH) {
+      Alert.alert('Enter your MPIN', `Please enter your ${MPIN_LENGTH}-digit MPIN to continue.`);
+      return;
+    }
+    await doLogin(phone, mpin);
   };
 
   const handleBiometric = async () => {
-    setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 700));
-    setIsLoading(false);
-    onLoginSuccess(true);
+    // Biometric convenience path: use entered phone if present, else demo phone,
+    // with the demo MPIN. Still performs a real API login + JWT storage.
+    const loginPhone = phone.length >= 10 ? phone : DEMO_PHONE;
+    await doLogin(loginPhone, DEMO_MPIN);
   };
 
   const handleForgotMpin = () => {
@@ -107,9 +132,26 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             <View style={styles.avatar}>
               <Feather name="user" size={32} color={COLORS.primary} />
             </View>
-            <Text style={styles.userName}>Swayam Kohli</Text>
-            <Text style={styles.lastLogin}>Last login: Today, 09:15 AM</Text>
+            <Text style={styles.userName}>Welcome Back</Text>
+            <Text style={styles.lastLogin}>Sign in to continue</Text>
           </View>
+
+          {/* Phone label */}
+          <View style={styles.mpinLabelRow}>
+            <Text style={styles.mpinLabel}>Phone Number</Text>
+          </View>
+
+          {/* Phone input */}
+          <TextInput
+            style={styles.phoneInput}
+            value={phone}
+            onChangeText={handlePhoneChange}
+            keyboardType="phone-pad"
+            placeholder="Enter registered phone number"
+            placeholderTextColor={COLORS.textTertiary}
+            maxLength={15}
+            editable={!isLoading}
+          />
 
           {/* MPIN label + glossary */}
           <View style={styles.mpinLabelRow}>
@@ -125,7 +167,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             onPress={() => inputRef.current?.focus()}
             activeOpacity={0.8}
           >
-            {Array.from({ length: 4 }).map((_, i) => (
+            {Array.from({ length: MPIN_LENGTH }).map((_, i) => (
               <View
                 key={i}
                 style={[
@@ -143,19 +185,19 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             value={mpin}
             onChangeText={handleMpinChange}
             keyboardType="number-pad"
-            maxLength={4}
+            maxLength={MPIN_LENGTH}
             secureTextEntry
-            autoFocus
           />
 
           {/* Login button */}
           <TouchableOpacity
             style={[
               styles.primaryBtn,
-              (mpin.length !== 4 || isLoading) && styles.primaryBtnDisabled,
+              (mpin.length !== MPIN_LENGTH || phone.length < 10 || isLoading) &&
+                styles.primaryBtnDisabled,
             ]}
             onPress={handleLogin}
-            disabled={mpin.length !== 4 || isLoading}
+            disabled={mpin.length !== MPIN_LENGTH || phone.length < 10 || isLoading}
             activeOpacity={0.8}
           >
             <Text style={styles.primaryBtnText}>
@@ -183,7 +225,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
           <View style={styles.demoNote}>
             <Feather name="info" size={13} color={COLORS.accentDark} />
             <Text style={styles.demoNoteText}>
-              Demo mode — use MPIN <Text style={styles.demoMpin}>1234</Text> or tap Biometric
+              Demo mode — MPIN <Text style={styles.demoMpin}>{DEMO_MPIN}</Text> or tap Biometric
             </Text>
           </View>
 
@@ -280,6 +322,19 @@ const styles = StyleSheet.create({
     color: COLORS.textTertiary,
   },
 
+  // Phone input
+  phoneInput: {
+    ...TYPOGRAPHY.body,
+    color: COLORS.text,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: BORDER_RADIUS.lg,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    marginBottom: SPACING.lg,
+  },
+
   // MPIN
   mpinLabelRow: {
     flexDirection: 'row',
@@ -296,7 +351,7 @@ const styles = StyleSheet.create({
   dotsRow: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: SPACING.lg,
+    gap: SPACING.md,
     marginBottom: SPACING.xl,
   },
   dot: {

@@ -1,13 +1,13 @@
 // src/utils/phishingAnalyzer.ts
-// SecureWealth Twin — Mock Phishing Intelligence Engine
+// SecureWealth Twin — Offline Phishing Fallback
 //
-// Simulates the real Phishing Intelligence Layer (phishing_engine.py).
-// Deterministic keyword/pattern matching so the Finals demo reliably
-// reproduces all three classifications: SAFE, SUSPICIOUS, PHISHING.
+// STATUS: No longer the primary path. PhishingScannerScreen now calls the real
+// POST /phishing/scan endpoint first; this deterministic keyword/pattern
+// matcher only runs if that request fails (offline demo / API down), so the
+// screen never dead-ends.
 //
-// When the real backend is ready, replace `analyzeMessage()` with an API call
-// to POST /phishing/scan — the return shape (PhishingAssessment) should match
-// what phishing_engine.py + explainability_engine.py output.
+// Kept byte-for-byte identical to the original mock engine so behavior is
+// unchanged in the fallback case.
 
 export type PhishingClass = 'SAFE' | 'SUSPICIOUS' | 'PHISHING';
 
