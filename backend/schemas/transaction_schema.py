@@ -1,3 +1,4 @@
+# backend/schemas/transaction_schema.py
 from __future__ import annotations
 
 from datetime import datetime
@@ -32,10 +33,14 @@ class TransactionResponse(BaseModel):
     channel: TransactionChannel
     transaction_time: datetime
     status: TransactionStatus
+    decision: str | None = None  # NEW: Security decision
+    decision_timestamp: datetime | None = None  # NEW: Decision timestamp
     created_at: datetime
 
 
 class TransactionStatusResponse(BaseModel):
     transaction_id: UUID
     status: TransactionStatus
+    decision: str | None = None  # NEW: Include decision in status
+    decision_timestamp: datetime | None = None
     transaction_time: datetime

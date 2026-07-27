@@ -1,6 +1,18 @@
 // src/screens/AuditDashboardScreen.tsx
 // SecureWealth Twin — Security Audit Dashboard (Admin / Bank Officer Only)
 //
+// ⚠️ BACKEND FLAG: Same gap as MySecurityActivityScreen — the Master API
+// Documentation (Finals Architecture Freeze v2) has no admin audit-log listing
+// endpoint (no GET /audit, no hash-chain export, no replica-status endpoint).
+// The Security Engine APIs only expose per-request risk/decision evaluation,
+// not a queryable audit trail. This screen therefore stays fully on
+// mockData/audit_logs.json until an audit service endpoint is defined.
+//
+// When that endpoint exists, the swap is localized: replace the single
+// `auditLogsData` import + the derived `chainHashes`/summary counts (all of
+// which are already pure functions of an array of records matching this
+// mock's shape) with the fetched array. No component structure changes needed.
+//
 // This screen is NOT part of the user-facing tab navigator. It is accessed
 // via the admin modal stack (Profile tab -> Admin: Audit Dashboard button).
 //

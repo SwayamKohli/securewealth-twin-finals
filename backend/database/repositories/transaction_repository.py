@@ -1,3 +1,4 @@
+# backend/database/repositories/transaction_repository.py (modified)
 from __future__ import annotations
 
 from datetime import datetime
@@ -5,7 +6,6 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from models.enums import TransactionStatus
 from models.transaction import Transaction
 
 
@@ -29,9 +29,7 @@ class TransactionRepository:
     ) -> Transaction | None:
         return (
             self.db.query(Transaction)
-            .filter(
-                Transaction.transaction_id == transaction_id,
-            )
+            .filter(Transaction.transaction_id == transaction_id)
             .first()
         )
 
@@ -71,6 +69,7 @@ class TransactionRepository:
         to_date: datetime | None = None,
         status: TransactionStatus | None = None,
         account_id: UUID | None = None,
+        decision: str | None = None,  # NEW: Filter by decision
     ) -> list[Transaction]:
         query = (
             self.db.query(Transaction)
@@ -98,6 +97,12 @@ class TransactionRepository:
             query = query.filter(
                 Transaction.account_id == account_id,
             )
+            
+        # NEW: Filter by decision
+        if decision is not None:
+            query = query.filter(
+                Transaction.decision == decision,
+            )
 
         return (
             query.order_by(
@@ -110,21 +115,27 @@ class TransactionRepository:
         self,
         transaction_id: UUID,
     ) -> tuple[TransactionStatus, datetime] | None:
-        return (
+        result = (
             self.db.query(
                 Transaction.status,
                 Transaction.transaction_time,
+                Transaction.decision,  # NEW: Also return decision
+                Transaction.decision_timestamp
             )
             .filter(
                 Transaction.transaction_id == transaction_id,
             )
             .first()
         )
-    
+        
+        if result:
+            return result[0], result[1], result[2], result[3]  # status, time, decision, decision_time
+        return None, None, None, None
+
     def get_recent_by_account(
-    self,
-    account_id: UUID,
-    limit: int = 5,
+        self,
+        account_id: UUID,
+        limit: int = 5,
     ) -> list[Transaction]:
         return (
             self.db.query(Transaction)

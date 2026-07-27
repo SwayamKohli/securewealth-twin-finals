@@ -22,6 +22,12 @@ from services.deposit_service import DepositService
 from services.loan_service import LoanService
 from services.transaction_service import TransactionService
 
+# NEW: Import AI services
+from services.ai.profile_service import ProfileService
+from services.ai.wealth_service import WealthService
+from schemas.wealth.profile_schema import ProfileRequest
+from schemas.wealth.wealth_schema import WealthRequest
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +42,10 @@ class AggregationService:
         self.transaction_service = TransactionService(db)
         self.deposit_service = DepositService()
         self.loan_service = LoanService()
+        
+        # NEW: AI services
+        self.profile_service = ProfileService(db)
+        self.wealth_service = WealthService(db)
 
     def get_accounts(
         self,
@@ -195,16 +205,16 @@ class AggregationService:
 
             total_deposits = sum(
                 (
-                    deposit.principal
-                    for deposit in deposits
+                    Decimal(str(d.principal))  # FIXED: Convert to string then Decimal
+                    for d in deposits
                 ),
                 Decimal("0.00"),
             )
 
             total_liabilities = sum(
                 (
-                    loan.outstanding_amount
-                    for loan in loans
+                    Decimal(str(l.outstanding_amount))  # FIXED: Convert to string then Decimal
+                    for l in loans
                 ),
                 Decimal("0.00"),
             )
@@ -267,5 +277,118 @@ class AggregationService:
 
         except Exception:
             logger.exception("Error while calculating cash flow.")
+            traceback.print_exc()
+            raise
+
+    # NEW: Methods that integrate with AI engines
+    def generate_financial_profile(
+        self,
+        user_id: UUID,
+    ) -> dict:
+        """
+        Generate a unified financial profile using the AI profile builder.
+        """
+        try:
+            # Gather all financial data
+            accounts = self.account_service.get_accounts(user_id=user_id)
+            deposits = self.deposit_service.get_deposits(db=self.db, user_id=user_id)
+            loans = self.loan_service.get_loans(db=self.db, user_id=user_id)
+            
+            # Get recent transactions for cashflow analysis
+            transactions = self.transaction_service.get_transactions(user_id=user_id)
+            
+            # Construct AA data format expected by profile builder
+            aa_data = {
+                "user_id": str(user_id),
+                "accounts": [
+                    {
+                        "account_id": str(acc.account_id),
+                        "account_type": str(acc.account_type.value),
+                        "balance": float(acc.balance),  # Convert Decimal to float for JSON serialization
+                        "currency": str(acc.currency)
+                    }
+                    for acc in accounts
+                ],
+                "deposits": [
+                    {
+                        "deposit_id": str(dep.deposit_id),
+                        "deposit_type": str(dep.deposit_type.value),
+                        "principal": float(dep.principal),  # Convert Decimal to float
+                        "interest_rate": float(dep.interest_rate),
+                        "maturity_date": str(dep.maturity_date),
+                        "institution": str(dep.institution)
+                    }
+                    for dep in deposits
+                ],
+                "loans": [
+                    {
+                        "loan_id": str(ln.loan_id),
+                        "loan_type": str(ln.loan_type.value),
+                        "outstanding_amount": float(ln.outstanding_amount),  # Convert Decimal to float
+                        "emi": float(ln.emi),
+                        "interest_rate": float(ln.interest_rate),
+                        "remaining_tenure": ln.remaining_tenure
+                    }
+                    for ln in loans
+                ],
+                "transactions": [
+                    {
+                        "transaction_id": str(tx.transaction_id),
+                        "amount": float(tx.amount),  # Convert Decimal to float
+                        "merchant_name": str(tx.merchant_name),
+                        "merchant_category": str(tx.merchant_category),
+                        "channel": str(tx.channel.value),
+                        "transaction_time": str(tx.transaction_time),
+                        "status": str(tx.status.value)
+                    }
+                    for tx in transactions
+                ]
+            }
+            
+            # Build financial profile using AI
+            profile_request = ProfileRequest(aa_data=aa_data)
+            profile_response = self.profile_service.build_financial_profile(profile_request)
+            
+            return profile_response.profile
+            
+        except Exception as e:
+            logger.exception("Error while generating financial profile.")
+            traceback.print_exc()
+            raise
+
+    def generate_wealth_recommendations(
+        self,
+        user_id: UUID,
+        fraud_probability: float = 0.0,
+    ) -> dict:
+        """
+        Generate wealth recommendations using the AI wealth engine.
+        """
+        try:
+            # First, get the financial profile
+            profile = self.generate_financial_profile(user_id)
+            
+            # Create wealth request
+            wealth_request = WealthRequest(
+                profile_data=profile,
+                fraud_probability=fraud_probability
+            )
+            
+            # Generate recommendations
+            wealth_response = self.wealth_service.generate_wealth_recommendations(
+                wealth_request,
+                fraud_probability=fraud_probability
+            )
+            
+            return {
+                "suppressed": wealth_response.suppressed,
+                "recommendations": wealth_response.recommendations,
+                "financial_health": wealth_response.financial_health,
+                "goal_summaries": wealth_response.goal_summaries,
+                "disclaimer": wealth_response.disclaimer
+            }
+            
+        except Exception as e:
+            logger.exception("Error while generating wealth recommendations.")
             traceback.print_exc()
             raise
