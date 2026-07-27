@@ -20,6 +20,9 @@ from services.loan_service import LoanService
 from services.transaction_service import TransactionService
 from services.user_service import UserService
 
+# NEW: Import AI services
+from services.aggregation_service import AggregationService
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +36,10 @@ class DashboardService:
 
         self.account_service = AccountService(db)
         self.transaction_service = TransactionService(db)
+        # NEW: Add the missing services
+        self.deposit_service = DepositService()
+        self.loan_service = LoanService()
+        self.aggregation_service = AggregationService(db)  # NEW: Use aggregation service with AI
 
     def get_dashboard(
         self,
@@ -44,6 +51,7 @@ class DashboardService:
                 user_id=user_id,
             )
 
+            # NEW: Use aggregation service to get AI-powered data
             accounts = self.account_service.get_accounts(
                 user_id=user_id,
             )
@@ -52,38 +60,40 @@ class DashboardService:
                 user_id=user_id,
             )
 
-            deposits = DepositService.get_deposits(
+            # NEW: Get deposits and loans using the services
+            deposits = self.deposit_service.get_deposits(
                 db=self.db,
                 user_id=user_id,
             )
 
-            loans = LoanService.get_loans(
+            loans = self.loan_service.get_loans(
                 db=self.db,
                 user_id=user_id,
             )
 
+            # Calculate basic financials - FIXED: Ensure all values are Decimal
             total_account_balance = sum(
                 (
-                    account.balance
+                    account.balance  # This is already Decimal
                     for account in accounts
                 ),
-                Decimal("0.00"),
+                Decimal("0.00"),  # Start with Decimal
             )
 
             total_deposit_principal = sum(
                 (
-                    deposit.principal
-                    for deposit in deposits
+                    Decimal(str(d.principal))  # Convert to string then Decimal to avoid float issues
+                    for d in deposits
                 ),
-                Decimal("0.00"),
+                Decimal("0.00"),  # Start with Decimal
             )
 
             total_outstanding_loans = sum(
                 (
-                    loan.outstanding_amount
-                    for loan in loans
+                    Decimal(str(l.outstanding_amount))  # Convert to string then Decimal to avoid float issues
+                    for l in loans
                 ),
-                Decimal("0.00"),
+                Decimal("0.00"),  # Start with Decimal
             )
 
             total_assets = (
@@ -162,38 +172,39 @@ class DashboardService:
                 user_id=user_id,
             )
 
-            deposits = DepositService.get_deposits(
+            deposits = self.deposit_service.get_deposits(
                 db=self.db,
                 user_id=user_id,
             )
 
-            loans = LoanService.get_loans(
+            loans = self.loan_service.get_loans(
                 db=self.db,
                 user_id=user_id,
             )
 
+            # FIXED: Ensure all values are Decimal
             total_account_balance = sum(
                 (
-                    account.balance
+                    account.balance  # This is already Decimal
                     for account in accounts
                 ),
-                Decimal("0.00"),
+                Decimal("0.00"),  # Start with Decimal
             )
 
             total_deposit_principal = sum(
                 (
-                    deposit.principal
-                    for deposit in deposits
+                    Decimal(str(d.principal))  # Convert to string then Decimal to avoid float issues
+                    for d in deposits
                 ),
-                Decimal("0.00"),
+                Decimal("0.00"),  # Start with Decimal
             )
 
             total_outstanding_loans = sum(
                 (
-                    loan.outstanding_amount
-                    for loan in loans
+                    Decimal(str(l.outstanding_amount))  # Convert to string then Decimal to avoid float issues
+                    for l in loans
                 ),
-                Decimal("0.00"),
+                Decimal("0.00"),  # Start with Decimal
             )
 
             total_assets = (

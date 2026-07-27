@@ -1,3 +1,4 @@
+# backend/models/transaction.py
 from __future__ import annotations
 
 import uuid
@@ -69,6 +70,17 @@ class Transaction(Base, CreatedAtMixin):
     status: Mapped[TransactionStatus] = mapped_column(
         SqlEnum(TransactionStatus, name="transaction_status_enum"),
         nullable=False,
+    )
+
+    # NEW: Security decision field
+    decision: Mapped[str | None] = mapped_column(
+        String(20),  # ALLOW, WARN, CHALLENGE, BLOCK
+        nullable=True,
+    )
+
+    decision_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     user: Mapped["User"] = relationship(

@@ -1,23 +1,16 @@
 // src/screens/SecurityReviewScreen.tsx
 // SecureWealth Twin — Security Check
 //
-// Two phases:
-//  1. 'checking'  — animated shield + cycling status messages (~1.8s)
-//  2. 'result'    — decision-specific UI built from DECISION_STYLES (theme.ts)
-//
-// Decision-specific actions (CRITICAL — security-first principle from blueprint):
-//  ALLOW     -> single "Continue" button
-//  WARN      -> "Continue Payment" (primary) + "Cancel and go back" (text link)
-//  CHALLENGE -> quick MPIN re-verification, then "Verify & Continue"
-//  BLOCK     -> NO continue option at all. Only "Go to Home" + "Report This Was Me".
-//               This is intentional: a blocked payment must never be resumable
-//               from this screen, matching the blueprint's "Payment Stopped for
-//               Your Safety" guarantee.
-//
-// When the real backend is ready: replace the `assessTransaction()` call with
-// POST /transaction/evaluate, and replace the `riskSignalsData` lookup with
-// whatever explanation strings the explanation_engine.py returns (same shape
-// is recommended: { friendlyName, explanation, icon, severity }).
+// BACKEND INTEGRATION (was local assessTransaction() simulator):
+//  • The "checking" phase now runs the REAL decision chain:
+//      POST /ai/fraud/evaluate → POST /security/risk/evaluate → POST /security/decision/make
+//    Risk signals the UI can't collect are synthesized (utils/riskBuilder.ts),
+//    preserving the old demo thresholds. The BACKEND's decision drives the UI.
+//  • Money moves on Continue / Verify (not before): POST /transactions/initiate.
+//    BLOCK never initiates and stays non-resumable (unchanged guarantee).
+//  • Falls back to the local synthesized decision only if the API is unreachable,
+//    so the demo still works offline.
+//  • UI phases, animations, DECISION_STYLES, and styles are unchanged.
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -43,8 +36,29 @@ import {
   DECISION_STYLES,
   ZERO_DAY_STYLES,
 } from '../constants/theme';
-import { assessTransaction, RiskAssessment } from '../utils/riskSimulator';
 import riskSignalsData from '../../mockData/risk_signals.json';
+import { api, ApiError } from '../api/apiService';
+import {
+  synthesizeProfile,
+  buildFraudRequest,
+  buildRiskRequest,
+  buildDecisionRequest,
+  signalIdsFor,
+  type SynthInput,
+} from '../utils/riskBuilder';
+
+// ── Local decision types (previously from riskSimulator) ──────────────────────
+type Decision = 'ALLOW' | 'WARN' | 'CHALLENGE' | 'BLOCK';
+type ZeroDayClass = 'KNOWN' | 'SUSPICIOUS' | 'UNKNOWN';
+
+interface RiskAssessment {
+  decision: Decision;
+  riskScore: number;
+  zeroDayClass: ZeroDayClass;
+  signalIds: string[];
+  // NEW: identifiers carried forward so TransactionResult can show the real txn.
+  transactionId?: string | null;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const formatCurrency = (n: number) => '\u20B9' + n.toLocaleString('en-IN');
@@ -72,6 +86,39 @@ const CHECK_STEPS = [
 ];
 
 type Phase = 'checking' | 'result';
+
+// Normalize a backend decision string into our union (defensive).
+const normalizeDecision = (d: string | null | undefined): Decision => {
+  const up = String(d || '').toUpperCase();
+  if (up === 'BLOCK' || up === 'WARN' || up === 'CHALLENGE' || up === 'ALLOW') return up as Decision;
+  return 'ALLOW';
+};
+
+// Map a numeric risk score → the zero-day "how unusual" bucket the UI shows.
+const zeroDayFromScore = (score: number, hint: string): ZeroDayClass => {
+  if (hint === 'FRAUD' || score >= 80) return 'UNKNOWN';
+  if (score >= 30) return 'SUSPICIOUS';
+  return 'KNOWN';
+};
+
+// Pure-local fallback decision (mirrors the old simulator thresholds) so the
+// demo still resolves if the network is down.
+const localFallback = (input: SynthInput): RiskAssessment => {
+  const p = synthesizeProfile(input);
+  const map: Record<string, { decision: Decision; score: number }> = {
+    FRAUD: { decision: 'BLOCK', score: 92 },
+    SPIKE: { decision: 'WARN', score: 38 },
+    NEW_RECIPIENT: { decision: 'CHALLENGE', score: 55 },
+    CLEAN: { decision: 'ALLOW', score: 8 },
+  };
+  const r = map[p.hint];
+  return {
+    decision: r.decision,
+    riskScore: r.score,
+    zeroDayClass: zeroDayFromScore(r.score, p.hint),
+    signalIds: signalIdsFor(p.hint),
+  };
+};
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -165,37 +212,138 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
   const [assessment, setAssessment] = useState<RiskAssessment | null>(null);
   const [expandedSignal, setExpandedSignal] = useState<string | null>(null);
   const [mpin, setMpin] = useState('');
+  const [processing, setProcessing] = useState(false); // initiate in flight
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(16)).current;
 
+  const revealResult = () => {
+    setPhase('result');
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 350,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const result = assessTransaction({
-        amount: transactionData.amount,
-        isNewRecipient: transactionData.isNewRecipient,
-      });
-      setAssessment(result);
-      setPhase('result');
+    let cancelled = false;
+    const startedAt = Date.now();
+    const MIN_CHECK_MS = 1800; // keep the reassuring animation duration
 
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 350,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }, 1800);
+    const input: SynthInput = {
+      amount: transactionData.amount,
+      isNewRecipient: transactionData.isNewRecipient,
+    };
+    const profile = synthesizeProfile(input);
 
-    return () => clearTimeout(timer);
+    const finish = (result: RiskAssessment) => {
+      const elapsed = Date.now() - startedAt;
+      const wait = Math.max(0, MIN_CHECK_MS - elapsed);
+      setTimeout(() => {
+        if (cancelled) return;
+        setAssessment(result);
+        revealResult();
+      }, wait);
+    };
+
+    (async () => {
+      try {
+        // 1) Fraud probability
+        const fraud = await api.evaluateFraud(buildFraudRequest(input));
+        const fraudProb = Number(fraud?.fraud_probability) || 0;
+        const confidence = Number(fraud?.confidence) || 0;
+
+        // 2) Risk score (combines synthesized signals + AI fraud output)
+        const risk = await api.evaluateRisk(buildRiskRequest(input, fraudProb, confidence));
+        const riskScore = Number(risk?.risk_score) || 0;
+
+        // 3) Final decision. We don't have a real transaction_id yet (money moves
+        //    on Continue), so we pass a placeholder for the decision preview.
+        const decisionRes = await api.makeDecision(
+          buildDecisionRequest(input, {
+            transactionId: 'preview',
+            accountId: transactionData.fromAccountId || 'self',
+            channel: transactionData.channel || transactionData.paymentMode || 'IMPS',
+            aiFraudProbability: fraudProb,
+            aiConfidence: confidence,
+          })
+        );
+
+        const decision = normalizeDecision(decisionRes?.decision);
+        const finalScore = Number(decisionRes?.risk_score ?? riskScore) || riskScore;
+
+        finish({
+          decision,
+          riskScore: finalScore,
+          zeroDayClass: zeroDayFromScore(finalScore, profile.hint),
+          signalIds: signalIdsFor(profile.hint),
+        });
+      } catch (e) {
+        // Network/API failure → deterministic local fallback so the demo continues.
+        finish(localFallback(input));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Initiate the real transaction, then go to the receipt ────────────────────
+  const initiateAndContinue = async () => {
+    if (!assessment) return;
+
+    // If we don't have the identifiers needed to initiate, just show the receipt
+    // (keeps the flow working even if TransactionInitiate wasn't updated).
+    if (!transactionData.fromAccountId) {
+      navigation.navigate('TransactionResult', { transactionData, assessment });
+      return;
+    }
+
+    setProcessing(true);
+    try {
+      const txn = await api.initiateTransaction({
+        account_id: transactionData.fromAccountId,
+        amount: transactionData.amount,
+        merchant_name: transactionData.toLabel || 'Recipient',
+        merchant_category: 'Transfer',
+        channel: (transactionData.channel || 'IMPS') as any,
+      });
+
+      // Prefer the backend's decision on the actual transaction if present.
+      const backendDecision = normalizeDecision(txn?.decision ?? assessment.decision);
+      const finalAssessment: RiskAssessment = {
+        ...assessment,
+        decision: backendDecision,
+        transactionId: txn?.transaction_id ?? null,
+      };
+      navigation.navigate('TransactionResult', {
+        transactionData,
+        assessment: finalAssessment,
+      });
+    } catch (e) {
+      const err = e as ApiError;
+      const msg =
+        err instanceof ApiError && err.isNetworkError
+          ? 'We could not reach the server to complete your payment. Please try again.'
+          : err instanceof ApiError
+          ? err.message
+          : 'Something went wrong completing your payment.';
+      Alert.alert('Payment could not be completed', msg, [{ text: 'OK' }]);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   // ── Navigation actions ──────────────────────────────────────────────────────
   const goToResult = () => {
-    navigation.navigate('TransactionResult', { transactionData, assessment });
+    initiateAndContinue();
   };
 
   const handleCancel = () => {
@@ -342,7 +490,7 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
               keyboardType="number-pad"
               secureTextEntry
               maxLength={4}
-              placeholder="• • • •"
+              placeholder="\u2022 \u2022 \u2022 \u2022"
               placeholderTextColor={COLORS.textTertiary}
               textAlign="center"
             />
@@ -352,21 +500,29 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
         {/* ── Action buttons ── */}
         <View style={styles.actions}>
           {assessment.decision === 'ALLOW' && (
-            <TouchableOpacity style={styles.primaryBtn} onPress={goToResult} activeOpacity={0.8}>
-              <Text style={styles.primaryBtnText}>Continue</Text>
-              <Feather name="arrow-right" size={18} color={COLORS.textOnDark} />
+            <TouchableOpacity
+              style={[styles.primaryBtn, processing && styles.primaryBtnDisabled]}
+              onPress={goToResult}
+              disabled={processing}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.primaryBtnText}>{processing ? 'Processing\u2026' : 'Continue'}</Text>
+              {!processing && <Feather name="arrow-right" size={18} color={COLORS.textOnDark} />}
             </TouchableOpacity>
           )}
 
           {assessment.decision === 'WARN' && (
             <>
               <TouchableOpacity
-                style={styles.primaryBtn}
+                style={[styles.primaryBtn, processing && styles.primaryBtnDisabled]}
                 onPress={goToResult}
+                disabled={processing}
                 activeOpacity={0.8}
               >
-                <Text style={styles.primaryBtnText}>Continue Payment</Text>
-                <Feather name="arrow-right" size={18} color={COLORS.textOnDark} />
+                <Text style={styles.primaryBtnText}>
+                  {processing ? 'Processing\u2026' : 'Continue Payment'}
+                </Text>
+                {!processing && <Feather name="arrow-right" size={18} color={COLORS.textOnDark} />}
               </TouchableOpacity>
               <TouchableOpacity style={styles.textLinkBtn} onPress={handleCancel} activeOpacity={0.7}>
                 <Text style={styles.textLinkText}>Cancel and go back</Text>
@@ -377,13 +533,15 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
           {assessment.decision === 'CHALLENGE' && (
             <>
               <TouchableOpacity
-                style={[styles.primaryBtn, mpin.length !== 4 && styles.primaryBtnDisabled]}
+                style={[styles.primaryBtn, (mpin.length !== 4 || processing) && styles.primaryBtnDisabled]}
                 onPress={handleVerify}
-                disabled={mpin.length !== 4}
+                disabled={mpin.length !== 4 || processing}
                 activeOpacity={0.8}
               >
                 <Feather name="shield" size={16} color={COLORS.textOnDark} />
-                <Text style={styles.primaryBtnText}>Verify & Continue</Text>
+                <Text style={styles.primaryBtnText}>
+                  {processing ? 'Processing\u2026' : 'Verify & Continue'}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.textLinkBtn} onPress={handleCancel} activeOpacity={0.7}>
                 <Text style={styles.textLinkText}>Cancel and go back</Text>

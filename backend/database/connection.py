@@ -10,7 +10,7 @@ from core.config import settings
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
-    echo=True,
+    echo=False,
 )
 
 SessionLocal = sessionmaker(
