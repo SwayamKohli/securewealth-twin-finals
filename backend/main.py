@@ -16,7 +16,7 @@ from api.loans import router as loans_router
 from api.cards import router as cards_router
 from api.dashboard import router as dashboard_router
 from api.aggregation import router as aggregation_router
-
+from api.audit import router as audit_router
 
 from core.config import settings
 
@@ -46,3 +46,4 @@ app.include_router(loans_router)
 app.include_router(cards_router)
 app.include_router(dashboard_router)
 app.include_router(aggregation_router)
+app.include_router(audit_router, prefix="/api/v1")
