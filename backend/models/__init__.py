@@ -8,3 +8,9 @@ from .transaction import Transaction
 from .behavioural_profile import BehaviouralProfile
 from .recommendation import Recommendation
 from .auth_credential import AuthCredential
+from .audit import AuditLog
+from .audit_replica import (
+    AuditReplica1,
+    AuditReplica2,
+    AuditReplica3,
+)
