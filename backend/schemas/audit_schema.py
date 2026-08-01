@@ -102,6 +102,50 @@ class RecoveryResponse(BaseModel):
     recovery_event_id: UUID | None
     message: str
 
+class ReplicaVerificationResult(BaseModel):
+    audit_id: UUID
+
+    comparison: dict[str, dict]
+
+    healthy_copies: int
+
+    corrupted_copies: list[str]
+
+    replicas_behind: list[str]
+
+    recovery_required: bool
+
+    recovery_possible: bool
+class RecoveryResult(BaseModel):
+    audit_id: UUID
+
+    recovered: bool
+
+    repaired_copies: list[str]
+
+    source_copy: str | None
+
+    message: str
+
+class IntegrityReport(BaseModel):
+    started_at: datetime
+    completed_at: datetime
+
+    overall_status: str
+
+    hash_chain_valid: bool
+    checked_records: int
+
+    signatures_valid: int
+    signatures_invalid: int
+
+    replicas_valid: int
+    replicas_invalid: int
+
+    recoveries_attempted: int
+    recoveries_succeeded: int
+
+    findings: list[dict]
 
 # ============================================================
 # Tamper Finding

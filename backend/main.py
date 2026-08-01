@@ -3,6 +3,7 @@
 # uvicorn main:app --reload
 
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 
 from api.health import router as health_router
 from api.auth import router as auth_router
@@ -15,7 +16,11 @@ from api.loans import router as loans_router
 from api.cards import router as cards_router
 from api.dashboard import router as dashboard_router
 from api.aggregation import router as aggregation_router
+
+# audit routers
 from api.audit import router as audit_router
+from audit.audit_scheduler import AuditScheduler
+from core.dependencies import build_tamper_monitor, get_tamper_monitor
 
 # AI, Security and Phishing routers
 from api.ai import (
@@ -29,13 +34,28 @@ from api.security import (
     decision_router,
 )
 from api.phishing.phishing_api import router as phishing_router
-
 from core.config import settings
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    scheduler = AuditScheduler(
+        build_tamper_monitor()
+    )
+
+    await scheduler.start()
+
+    yield
+
+    await scheduler.stop()
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.API_VERSION,
     debug=True,
+    lifespan=lifespan,
 )
 
 

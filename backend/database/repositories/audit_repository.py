@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+from pyexpat import model
 from uuid import UUID
 
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from models.audit import AuditLog
-from models.audit_replica import AuditReplica
+from models.audit_replica import (
+    AuditReplica1,
+    AuditReplica2,
+    AuditReplica3,
+)
 
+REPLICA_MODELS = [
+    AuditReplica1,
+    AuditReplica2,
+    AuditReplica3,
+]
 
 class AuditRepository:
     def __init__(
@@ -18,7 +29,6 @@ class AuditRepository:
     # ==========================================================
     # MASTER AUDIT OPERATIONS
     # ==========================================================
-
     def create(
         self,
         audit: AuditLog,
@@ -44,7 +54,24 @@ class AuditRepository:
     ) -> AuditLog | None:
         return (
             self.db.query(AuditLog)
-            .order_by(AuditLog.created_at.desc())
+            .order_by(AuditLog.chain_index.desc())
+            .first()
+        )
+
+    def get_latest_before(
+        self,
+        current_audit_id,
+    ) -> AuditLog | None:
+
+        return (
+            self.db.query(AuditLog)
+            .filter(
+                AuditLog.audit_id != current_audit_id,
+            )
+            .order_by(
+                AuditLog.chain_index.desc(),
+                AuditLog.updated_at.desc(),
+            )
             .first()
         )
 
@@ -151,11 +178,10 @@ class AuditRepository:
     # ==========================================================
     # REPLICA OPERATIONS
     # ==========================================================
-
     def create_replica(
         self,
-        replica: AuditReplica,
-    ) -> AuditReplica:
+        replica,
+    ):
         self.db.add(replica)
         self.db.flush()
         self.db.refresh(replica)
@@ -164,33 +190,28 @@ class AuditRepository:
 
     def get_replica(
         self,
+        model,
         audit_id: UUID,
-        replica_name: str,
-    ) -> AuditReplica | None:
+    ):
         return (
-            self.db.query(AuditReplica)
-            .filter(
-                AuditReplica.audit_id == audit_id,
-                AuditReplica.replica_name == replica_name,
-            )
+            self.db.query(model)
+            .filter(model.audit_id == audit_id)
             .first()
         )
 
     def get_all_replicas(
         self,
         audit_id: UUID,
-    ) -> list[AuditReplica]:
-        return (
-            self.db.query(AuditReplica)
-            .filter(AuditReplica.audit_id == audit_id)
-            .order_by(AuditReplica.replica_name.asc())
-            .all()
-        )
+    ):
+        return {
+            model.__tablename__: self.get_replica(model, audit_id)
+            for model in REPLICA_MODELS
+        }
 
     def update_replica(
         self,
-        replica: AuditReplica,
-    ) -> AuditReplica:
+        replica,
+    ):
         self.db.flush()
         self.db.refresh(replica)
 
@@ -198,14 +219,85 @@ class AuditRepository:
 
     def delete_replica(
         self,
-        replica: AuditReplica,
-    ) -> None:
+        replica,
+    ):
         self.db.delete(replica)
         self.db.flush()
+
+    def get_replica_chain(
+        self,
+        model,
+    ):
+        return (
+            self.db.query(model)
+            .order_by(model.created_at.asc())
+            .all()
+        )
+
+    def replica_exists(
+        self,
+        model,
+        audit_id: UUID,
+    ):
+        return (
+            self.db.query(model)
+            .filter(model.audit_id == audit_id)
+            .first()
+            is not None
+        )
 
     # ==========================================================
     # RECOVERY
     # ==========================================================
+    def replace_replica(
+        self,
+        model,
+        audit_id: UUID,
+        replacement,
+    ):
+        """
+        Replaces the contents of a replica record with a healthy copy.
+
+        Used by RecoveryService after majority consensus determines
+        the correct version of the audit record.
+
+        Only the audit data is replaced.
+        Replica-specific metadata is preserved.
+        """
+
+        replica = self.get_replica(
+            model=model,
+            audit_id=audit_id,
+        )
+
+        if replica is None:
+            raise ValueError(
+                f"Replica for audit record {audit_id} not found."
+            )
+
+        excluded_fields = {
+            "_sa_instance_state",
+            "replica_record_id",
+            "replica_name",
+            "created_at",
+            "updated_at",
+        }
+
+        for field, value in vars(replacement).items():
+
+            if field in excluded_fields:
+                continue
+
+            setattr(
+                replica,
+                field,
+                value,
+            )
+
+        self.db.flush()
+        self.db.refresh(replica)
+
+        return replica
 
     def replace_master_record(
         self,
@@ -213,6 +305,8 @@ class AuditRepository:
         replacement: AuditLog,
     ) -> AuditLog:
         audit = self.get_by_id(audit_id)
+
+        print(">>> replace_master_record called")
 
         if audit is None:
             raise ValueError(f"Audit record {audit_id} not found.")
@@ -258,17 +352,84 @@ class AuditRepository:
 
         return audit
 
+    def get_by_event_type(
+        self,
+        event_type: str,
+    ) -> list[AuditLog]:
+        """
+        Returns all audit records of a given event type,
+        ordered from newest to oldest.
+        """
+
+        return (
+            self.db.query(AuditLog)
+            .filter(
+                AuditLog.event_type == event_type
+            )
+            .order_by(
+                AuditLog.created_at.desc()
+            )
+            .all()
+        )
+
+
+    def get_summary(
+        self,
+    ) -> dict:
+        """
+        Returns aggregate statistics for the audit subsystem.
+        """
+
+        total_records = (
+            self.db.query(func.count(AuditLog.audit_id))
+            .scalar()
+        )
+
+        valid_records = (
+            self.db.query(func.count(AuditLog.audit_id))
+            .filter(
+                AuditLog.record_status == "VALID"
+            )
+            .scalar()
+        )
+
+        recovered_records = (
+            self.db.query(func.count(AuditLog.audit_id))
+            .filter(
+                AuditLog.event_type == "RECOVERY_EVENT"
+            )
+            .scalar()
+        )
+
+        corrupted_records = (
+            self.db.query(func.count(AuditLog.audit_id))
+            .filter(
+                AuditLog.record_status == "CORRUPTED"
+            )
+            .scalar()
+        )
+
+        latest_record_time = (
+            self.db.query(func.max(AuditLog.created_at))
+            .scalar()
+        )
+
+        return {
+            "total_records": total_records,
+            "valid_records": valid_records,
+            "recovered_records": recovered_records,
+            "corrupted_records": corrupted_records,
+            "latest_record_time": latest_record_time,
+        }
+
     # ==========================================================
     # STATISTICS
     # ==========================================================
-
-    def count(
+    def count_replicas(
         self,
-    ) -> int:
-        return (
-            self.db.query(AuditLog)
-            .count()
-        )
+        model,
+    ):
+        return self.db.query(model).count()
 
     def count_by_user(
         self,
@@ -303,7 +464,6 @@ class AuditRepository:
     # ==========================================================
     # PRIVATE HELPERS
     # ==========================================================
-
     def _flush_refresh(
         self,
         audit: AuditLog,
@@ -312,3 +472,12 @@ class AuditRepository:
         self.db.refresh(audit)
 
         return audit
+
+
+# This API is flexible enough to support all the future components you mentioned:
+
+# ✅ AuditService → create_replica()
+# ✅ ReplicaVerifier → get_replica(), get_all_replicas(), get_replica_chain()
+# ✅ TamperMonitor → get_all_replicas(), replica_exists()
+# ✅ RecoveryService → replace_replica(), update_replica()
+# ✅ AuditScheduler → reuses the same repository methods without needing any repository changes.

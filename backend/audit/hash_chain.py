@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional, Protocol
 
+from models.audit import AuditLog
+
 logger = logging.getLogger("guardian.hash_chaining")
 
 # ==========================================================
@@ -41,8 +43,11 @@ class ChainVerificationResult:
 # ==========================================================
 
 class _LatestRecordRepo(Protocol):
-    def get_latest(self) -> Any | None:
-        ...
+
+    def get_latest_before(
+        self,
+        current_audit_id,
+    ) -> AuditLog | None: ...
 
 
 # ==========================================================
@@ -198,6 +203,7 @@ class HashChainService:
     def get_previous_hash(
         self,
         repo: _LatestRecordRepo,
+        current_audit_id,
     ) -> str:
         """
         Returns the latest current_hash in the chain.
@@ -206,7 +212,9 @@ class HashChainService:
         returns the Genesis Hash.
         """
 
-        latest = repo.get_latest()
+        latest = repo.get_latest_before(
+        current_audit_id,
+    )
 
         if latest is None:
             logger.info(

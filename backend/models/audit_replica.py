@@ -15,7 +15,8 @@ from .mixins import TimestampMixin
 from .base import Base, generate_uuid
 
 
-class AuditReplica(Base, TimestampMixin):
+class AuditReplicaBase(Base, TimestampMixin):
+    __abstract__ = True
     __tablename__ = "audit_replicas"
 
     replica_record_id: Mapped[str] = mapped_column(
@@ -168,3 +169,13 @@ class AuditReplica(Base, TimestampMixin):
         default="VALID",
         nullable=False,
     )
+
+
+class AuditReplica1(AuditReplicaBase):
+    __tablename__ = "audit_replica_1"
+
+class AuditReplica2(AuditReplicaBase):
+    __tablename__ = "audit_replica_2"
+
+class AuditReplica3(AuditReplicaBase):
+    __tablename__ = "audit_replica_3"
