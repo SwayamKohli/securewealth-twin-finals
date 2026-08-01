@@ -1,6 +1,8 @@
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     ForeignKey,
+    Identity,
     Integer,
     Numeric,
     String,
@@ -21,6 +23,13 @@ class AuditLog(Base, TimestampMixin):
         UUID(as_uuid=True),
         primary_key=True,
         default=generate_uuid,
+    )
+
+    chain_index = mapped_column(
+        BigInteger,
+        Identity(always=True),
+        nullable=False,
+        unique=True,
     )
 
     transaction_id: Mapped[str | None] = mapped_column(

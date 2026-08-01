@@ -7,11 +7,16 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Protocol
 from uuid import UUID
+from models.base import Base
 
 from audit.hash_chain import HashChainService
 from audit.signature_service import SignatureService
 from models.audit import AuditLog
-from models.audit_replica import AuditReplica
+from models.audit_replica import (
+    AuditReplica1,
+    AuditReplica2,
+    AuditReplica3,
+)
 
 logger = logging.getLogger("guardian.audit_service")
 
@@ -78,8 +83,8 @@ class AuditRepository(Protocol):
 
     def create_replica(
         self,
-        replica: AuditReplica,
-    ) -> AuditReplica:
+        replica: Base,
+    ) -> Base:
         ...
 
     def get_latest(
@@ -230,7 +235,8 @@ class AuditService:
         """
 
         previous_hash = self._hash.get_previous_hash(
-            self._repo,
+            repo=self._repo,
+            current_audit_id=audit.audit_id,
         )
 
         audit.previous_hash = previous_hash
@@ -238,7 +244,7 @@ class AuditService:
         audit.current_hash = self._hash.generate_current_hash(
             record=self._record_to_dict(audit),
             previous_hash=previous_hash,
-            timestamp=str(self._now()),
+            timestamp=str(audit.created_at),
         )
 
     def _generate_signature(
@@ -255,64 +261,88 @@ class AuditService:
 
         audit.digital_signature = signature
 
+    def _build_replica(
+        self,
+        replica_model,
+        audit: AuditLog,
+    ):
+        """
+        Builds a replica object from an AuditLog.
+
+        This method only constructs the ORM object.
+        No database operations are performed.
+        """
+        replica_name = {
+            AuditReplica1: "REPLICA_1",
+            AuditReplica2: "REPLICA_2",
+            AuditReplica3: "REPLICA_3",
+        }[replica_model]
+        return replica_model(
+            audit_id=audit.audit_id,
+            replica_name=replica_name,
+            transaction_id=audit.transaction_id,
+            user_id=audit.user_id,
+            device_id=audit.device_id,
+            account_id=audit.account_id,
+
+            event_type=audit.event_type,
+
+            final_decision=audit.final_decision,
+            risk_score=audit.risk_score,
+
+            amount=audit.amount,
+            channel=audit.channel,
+
+            ai_status=audit.ai_status,
+            ai_confidence=audit.ai_confidence,
+            unknown_risk_severity=audit.unknown_risk_severity,
+            unknown_risk_applied=audit.unknown_risk_applied,
+            unknown_risk_decision=audit.unknown_risk_decision,
+            unknown_risk_reason_code=audit.unknown_risk_reason_code,
+
+            challenge_required=audit.challenge_required,
+            challenge_type=audit.challenge_type,
+            challenge_trigger_signal=audit.challenge_trigger_signal,
+
+            security_signals=audit.security_signals,
+
+            audit_note=audit.audit_note,
+            compliance_reference=audit.compliance_reference,
+
+            previous_hash=audit.previous_hash,
+            current_hash=audit.current_hash,
+
+            digital_signature=audit.digital_signature,
+            signature_algorithm=audit.signature_algorithm,
+
+            record_status=audit.record_status,
+        )
+
     def _replicate_record(
         self,
         audit: AuditLog,
     ) -> None:
         """
-        Create three identical replica records.
+        Creates identical replicas of an audit record
+        across all replica tables.
         """
 
-        for replica_name in (
-            "REPLICA_A",
-            "REPLICA_B",
-            "REPLICA_C",
-        ):
+        replica_models = [
+            AuditReplica1,
+            AuditReplica2,
+            AuditReplica3,
+        ]
 
-            replica = AuditReplica(
-                audit_id=audit.audit_id,
-                replica_name=replica_name,
+        for model in replica_models:
 
-                transaction_id=audit.transaction_id,
-                user_id=audit.user_id,
-                device_id=audit.device_id,
-                account_id=audit.account_id,
-
-                event_type=audit.event_type,
-
-                final_decision=audit.final_decision,
-                risk_score=audit.risk_score,
-
-                amount=audit.amount,
-                channel=audit.channel,
-
-                ai_status=audit.ai_status,
-                ai_confidence=audit.ai_confidence,
-                unknown_risk_severity=audit.unknown_risk_severity,
-                unknown_risk_applied=audit.unknown_risk_applied,
-                unknown_risk_decision=audit.unknown_risk_decision,
-                unknown_risk_reason_code=audit.unknown_risk_reason_code,
-
-                challenge_required=audit.challenge_required,
-                challenge_type=audit.challenge_type,
-                challenge_trigger_signal=audit.challenge_trigger_signal,
-
-                security_signals=audit.security_signals,
-
-                audit_note=audit.audit_note,
-                compliance_reference=audit.compliance_reference,
-
-                previous_hash=audit.previous_hash,
-                current_hash=audit.current_hash,
-
-                digital_signature=audit.digital_signature,
-                signature_algorithm=audit.signature_algorithm,
-
-                record_status=audit.record_status,
+            replica = self._build_replica(
+                model,
+                audit,
             )
 
-            self._repo.create_replica(replica)
-
+            self._repo.create_replica(
+                replica,
+            )
     # ======================================================
     # PUBLIC API
     # ======================================================
@@ -341,25 +371,17 @@ class AuditService:
             Return Persisted Record
         """
 
-        audit = self._build_audit_model(
-            data,
-        )
+        audit = self._build_audit_model(data)
 
-        self._generate_hash(
-            audit,
-        )
+        persisted = self._repo.create(audit)
 
-        self._generate_signature(
-            audit,
-        )
+        self._generate_hash(persisted)
 
-        persisted = self._repo.create(
-            audit,
-        )
+        self._generate_signature(persisted)
 
-        self._replicate_record(
-            persisted,
-        )
+        persisted = self._repo.update(persisted)
+
+        self._replicate_record(persisted)
 
         logger.info(
             "Audit record %s created successfully.",
@@ -445,3 +467,27 @@ class AuditService:
         """
 
         return self._repo.get_chain()
+
+    ###############################################################
+    #   RECOVERY OPERATIONS
+    ###############################################################
+
+    def get_recovery_history(
+        self,
+    ) -> list[AuditLog]:
+        """
+        Returns all recovery audit events.
+        """
+
+        return self._repo.get_by_event_type(
+            AuditEventType.RECOVERY_EVENT.value,
+        )
+
+    def get_audit_summary(
+        self,
+    ):
+        """
+        Returns summary statistics for the audit subsystem.
+        """
+
+        return self._repo.get_summary()

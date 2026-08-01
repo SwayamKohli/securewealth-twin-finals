@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict
 
-from hash_chain import HashChainService
+from .hash_chain import HashChainService
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
