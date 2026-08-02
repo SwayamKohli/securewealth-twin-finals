@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from database.repositories.account_repository import AccountRepository
 from database.repositories.transaction_repository import TransactionRepository
-from models.enums import TransactionStatus
+from models.enums import AccountType, TransactionStatus
 from models.transaction import Transaction
 from schemas.transaction_schema import (
     InitiateTransactionRequest,
@@ -20,10 +20,9 @@ from schemas.transaction_schema import (
     TransactionStatusResponse,
 )
 
-# NEW: Import decision engine
-from security.decision_engine import DecisionEngine, TransactionContext
-from security.risk_engine import RiskEvaluationInput, EnvironmentInput
-from security.behavior_engine import BehaviorEngine, BehaviorInput
+# Unified backend security pipeline (Behavior -> Fraud ML -> Zero-Day -> Risk -> Decision)
+from security.decision_engine import DecisionRecord
+from services.security.security_pipeline import SecurityPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +32,7 @@ class TransactionService:
         self.db = db
         self.transaction_repository = TransactionRepository(db)
         self.account_repository = AccountRepository(db)
-        
-        # NEW: Initialize security components
-        self.decision_engine = DecisionEngine()
-        self.behavior_engine = BehaviorEngine()
+        self.security_pipeline = SecurityPipeline(db)
 
     def initiate_transaction(
         self,
@@ -55,6 +51,13 @@ class TransactionService:
                     detail="Account not found.",
                 )
 
+            # Task 2.3: investments are funded from Savings accounts only.
+            if account.account_type != AccountType.SAVINGS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Investments can only be made from a Savings account.",
+                )
+
             if account.balance < request.amount:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -68,41 +71,38 @@ class TransactionService:
                 account=account
             )
             
-            # Apply decision logic
+            decision_time = self._parse_decision_timestamp(
+                decision_record.decision_timestamp
+            )
+
+            # Adaptive security (task 4.2):
+            #   ALLOW / WARN  -> complete immediately (silent for low risk)
+            #   CHALLENGE     -> hold as PENDING until the customer verifies
+            #   BLOCK         -> reject, nothing is debited
             if decision_record.decision == "BLOCK":
-                # Don't process transaction, just log it as blocked
-                transaction = Transaction(
-                    user_id=user_id,
-                    account_id=request.account_id,
-                    amount=request.amount,
-                    merchant_name=request.merchant_name,
-                    merchant_category=request.merchant_category,
-                    channel=request.channel,
-                    transaction_time=datetime.now(timezone.utc),
-                    status=TransactionStatus.FAILED,  # Mark as failed due to security block
-                    decision=decision_record.decision,
-                    decision_timestamp=decision_record.decision_timestamp
-                )
+                txn_status = TransactionStatus.FAILED
+            elif decision_record.decision == "CHALLENGE":
+                txn_status = TransactionStatus.PENDING
             else:
-                # Process normal transaction
+                txn_status = TransactionStatus.SUCCESS
                 new_balance: Decimal = account.balance - request.amount
                 self.account_repository.update_balance(
                     account=account,
                     new_balance=new_balance,
                 )
 
-                transaction = Transaction(
-                    user_id=user_id,
-                    account_id=request.account_id,
-                    amount=request.amount,
-                    merchant_name=request.merchant_name,
-                    merchant_category=request.merchant_category,
-                    channel=request.channel,
-                    transaction_time=datetime.now(timezone.utc),
-                    status=TransactionStatus.SUCCESS,
-                    decision=decision_record.decision,
-                    decision_timestamp=decision_record.decision_timestamp
-                )
+            transaction = Transaction(
+                user_id=user_id,
+                account_id=request.account_id,
+                amount=request.amount,
+                merchant_name=request.fund_name,
+                merchant_category=request.fund_category,
+                channel=request.channel,
+                transaction_time=datetime.now(timezone.utc),
+                status=txn_status,
+                decision=decision_record.decision,
+                decision_timestamp=decision_time,
+            )
 
             transaction = self.transaction_repository.create(
                 transaction,
@@ -111,9 +111,47 @@ class TransactionService:
             self.db.commit()
             self.db.refresh(transaction)
 
-            return TransactionResponse.model_validate(
-                transaction,
+            # CHALLENGE -> open a verification session (task 4.3)
+            if txn_status == TransactionStatus.PENDING:
+                from services.security.challenge_service import register_challenge
+
+                trigger = ""
+                if isinstance(decision_record.challenge_details, dict):
+                    trigger = decision_record.challenge_details.get(
+                        "trigger_signal", ""
+                    )
+                register_challenge(
+                    transaction.transaction_id,
+                    decision_record.challenge_type,
+                    trigger,
+                )
+
+            # Task 2.8: exactly ONE immutable audit record per investment
+            # request, written AFTER the final fraud decision. Audit failure
+            # must never fail the customer's transaction.
+            self._write_audit_record(
+                transaction=transaction,
+                user_id=user_id,
+                decision_record=decision_record,
             )
+
+            # Response carries the security verdict so the frontend never has
+            # to orchestrate AI modules itself (task 2.4).
+            response = TransactionResponse.model_validate(transaction)
+            response.risk_score = decision_record.risk_score
+            response.decision_report = (
+                decision_record.report or decision_record.audit_note or None
+            )
+            response.challenge_required = decision_record.challenge_required
+            response.challenge_type = decision_record.challenge_type or None
+
+            # Real triggered signals, so the app can show what was actually
+            # checked instead of guessing from the amount.
+            signals = decision_record.security_signals or {}
+            active = signals.get("active_behavior") or []
+            response.triggered_signals = [str(x) for x in active if x]
+
+            return response
 
         except HTTPException:
             self.db.rollback()
@@ -146,7 +184,6 @@ class TransactionService:
                         detail="Account not found.",
                     )
             
-            print(f"from_date: {from_date}, to_date: {to_date}, status_filter: {status_filter}, account_id: {account_id}")
 
             if to_date:
                 to_date = to_date.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -234,108 +271,162 @@ class TransactionService:
             traceback.print_exc()
             raise
 
-    # NEW: Security evaluation method
+    def complete_challenged_transaction(
+        self,
+        transaction_id: UUID,
+        user_id: UUID,
+    ) -> TransactionResponse:
+        """
+        Called by the ChallengeService once every verification step passes.
+        Debits the account and marks the held (PENDING) investment SUCCESS.
+        """
+        try:
+            transaction = self.transaction_repository.get_by_id_and_user(
+                transaction_id=transaction_id,
+                user_id=user_id,
+            )
+            if transaction is None:
+                raise HTTPException(status_code=404, detail="Transaction not found.")
+            if transaction.status != TransactionStatus.PENDING:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Transaction is not awaiting verification.",
+                )
+
+            account = self.account_repository.get_by_id_and_user(
+                account_id=transaction.account_id,
+                user_id=user_id,
+            )
+            if account is None or account.balance < transaction.amount:
+                transaction.status = TransactionStatus.FAILED
+                self.db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Insufficient balance to complete the investment.",
+                )
+
+            self.account_repository.update_balance(
+                account=account,
+                new_balance=account.balance - transaction.amount,
+            )
+            transaction.status = TransactionStatus.SUCCESS
+            self.db.commit()
+            self.db.refresh(transaction)
+            return TransactionResponse.model_validate(transaction)
+
+        except HTTPException:
+            raise
+        except Exception:
+            self.db.rollback()
+            logger.exception("Error completing challenged transaction.")
+            raise
+
+    def _write_audit_record(
+        self,
+        *,
+        transaction: Transaction,
+        user_id: UUID,
+        decision_record: DecisionRecord,
+    ) -> None:
+        """
+        Audit flow (task 2.8):
+            Investment Request -> Fraud Engine -> Decision -> Audit Entry.
+        One immutable, hash-chained, signed record per investment.
+        """
+        try:
+            # Imported lazily to keep the transaction path importable even if
+            # audit key material is missing in a dev environment.
+            from core.dependencies import (
+                get_hash_chain_service,
+                get_signature_service,
+            )
+            from database.repositories.audit_repository import AuditRepository
+            from services.audit_service import AuditLogData, AuditService
+
+            signals = decision_record.security_signals or {}
+            context = signals.get("context") or {}
+            ai_fraud = signals.get("ai_fraud") or {}
+
+            # Severity is encoded in the reason code, e.g. "UNKNOWN_RISK_HIGH"
+            severity = None
+            if decision_record.unknown_risk_reason_code:
+                severity = decision_record.unknown_risk_reason_code.rsplit("_", 1)[-1]
+
+            trigger_signal = None
+            if isinstance(decision_record.challenge_details, dict):
+                trigger_signal = decision_record.challenge_details.get(
+                    "trigger_signal"
+                ) or decision_record.challenge_details.get("reason")
+
+            audit_service = AuditService(
+                audit_repo=AuditRepository(self.db),
+                hash_service=get_hash_chain_service(),
+                signature_service=get_signature_service(),
+            )
+
+            audit_service.log_security_decision(
+                AuditLogData(
+                    transaction_id=transaction.transaction_id,
+                    user_id=user_id,
+                    device_id=context.get("device_id"),
+                    account_id=transaction.account_id,
+                    event_type="TRANSACTION_SECURITY",
+                    final_decision=decision_record.decision,
+                    risk_score=decision_record.risk_score,
+                    amount=transaction.amount,
+                    channel=transaction.channel.value,
+                    ai_status=(
+                        decision_record.unknown_risk_decision or None
+                        if decision_record.unknown_risk_applied
+                        else "NORMAL"
+                    ),
+                    ai_confidence=ai_fraud.get("confidence"),
+                    unknown_risk_severity=severity,
+                    unknown_risk_applied=decision_record.unknown_risk_applied,
+                    unknown_risk_decision=decision_record.unknown_risk_decision or None,
+                    unknown_risk_reason_code=decision_record.unknown_risk_reason_code or None,
+                    challenge_required=decision_record.challenge_required,
+                    challenge_type=decision_record.challenge_type or None,
+                    challenge_trigger_signal=trigger_signal,
+                    security_signals=signals,
+                    audit_note=decision_record.audit_note or decision_record.report,
+                    compliance_reference=decision_record.compliance_ref or None,
+                )
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            logger.exception(
+                "Audit record creation failed for transaction %s "
+                "(transaction itself was NOT affected).",
+                transaction.transaction_id,
+            )
+
+    @staticmethod
+    def _parse_decision_timestamp(value: str | None) -> datetime:
+        """DecisionRecord carries an ISO string; the DB column is DateTime."""
+        if value:
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                pass
+        return datetime.now(timezone.utc)
+
     def _evaluate_transaction_security(
         self,
         user_id: UUID,
         request: InitiateTransactionRequest,
-        account: "Account"
-    ) -> "DecisionRecord":
+        account: "Account",
+    ) -> DecisionRecord:
         """
-        Evaluate transaction security using the decision engine pipeline:
-        Behavior -> Risk -> Decision
+        Real-time fraud check (task 2.6). Delegates to the unified
+        SecurityPipeline: Behavior -> Fraud ML -> Zero-Day -> Risk -> Decision.
+        The pipeline is fail-safe: internal errors yield CHALLENGE, never ALLOW.
         """
-        try:
-            # Get user's behavioral baseline
-            from database.repositories.behavioural_profile_repository import BehaviouralProfileRepository
-            profile_repo = BehaviouralProfileRepository(self.db)
-            profile = profile_repo.get_by_user_id(user_id)
-            
-            # Get recent transaction data for behavior analysis
-            recent_transactions = self.transaction_repository.get_filtered(
-                user_id=user_id,
-                from_date=datetime.now(timezone.utc).replace(day=1),  # Last 30 days
-                to_date=datetime.now(timezone.utc)
-            )
-            
-            # Prepare behavior input
-            behavior_input = BehaviorInput(
-                transaction_hour_ist=datetime.now(timezone.utc).hour,
-                amount=float(request.amount),
-                ninety_day_median=float(profile.avg_amount) if profile else 5000.0,
-                ninety_day_std=float(profile.transaction_velocity) if profile else 2000.0,
-                recipient_id=request.merchant_name,
-                known_recipients=[t.merchant_name for t in recent_transactions],
-                recent_transaction_timestamps=[
-                    int(t.transaction_time.timestamp() * 1000) 
-                    for t in recent_transactions[-5:]  # Last 5 transactions
-                ],
-                last_20_amounts=[
-                    float(t.amount) 
-                    for t in recent_transactions[-20:]
-                ],
-                otp_entry_ms=4200  # Default value - would come from actual OTP timing
-            )
-            
-            # Analyze behavior
-            behavior_signals = self.behavior_engine.analyze(behavior_input)
-            
-            # Get device trust info (simplified)
-            from database.repositories.device_repository import DeviceRepository
-            device_repo = DeviceRepository(self.db)
-            user_devices = device_repo.get_user_devices(user_id)
-            current_device = user_devices[0] if user_devices else None
-            
-            device_trust = {
-                "device_status": current_device.trust_status.value if current_device else "NEW_DEVICE",
-                "device_confidence": current_device.device_confidence if current_device else 50,
-                "device_age_days": current_device.device_age_days if current_device else 0,
-                "security_signals": [current_device.trust_status.value] if current_device else []
-            }
-            
-            # Prepare risk evaluation input
-            risk_input = RiskEvaluationInput(
-                behavior_signals=behavior_signals,
-                environment=EnvironmentInput(
-                    ip_region="MUMBAI",  # Would come from actual request
-                    last_login_region="MUMBAI",
-                    time_since_last_login_ms=3600000,
-                    network_type="HOME_WIFI"
-                ),
-                device_trust=device_trust,
-                ai_fraud_probability=0.0,  # Would come from fraud engine
-                ai_confidence=0.0
-            )
-            
-            # Create transaction context
-            transaction_context = TransactionContext(
-                transaction_id=str(uuid.uuid4()),  # Temporary ID
-                account_id=str(request.account_id),
-                amount=float(request.amount),
-                channel=request.channel.value,
-                risk_input=risk_input
-            )
-            
-            # Get decision
-            decision_record = self.decision_engine.decide(transaction_context)
-            
-            return decision_record
-            
-        except Exception as e:
-            logger.warning(f"Security evaluation failed: {str(e)}, defaulting to ALLOW")
-            # Return a default allow decision if security evaluation fails
-            from security.decision_engine import DecisionRecord
-            return DecisionRecord(
-                transaction_id="temp",
-                account_id=str(request.account_id),
-                amount=float(request.amount),
-                channel=request.channel.value,
-                decision="ALLOW",
-                risk_score=0,
-                security_signals={},
-                challenge_required=False,
-                challenge_type="",
-                report="Security check bypassed due to error",
-                audit_note="Security check bypassed due to error",
-                decision_timestamp=datetime.now(timezone.utc).isoformat()
-            )
+        return self.security_pipeline.evaluate(
+            user_id=user_id,
+            account_id=request.account_id,
+            amount=float(request.amount),
+            channel=request.channel.value,
+            recipient_id=request.fund_name,
+        )

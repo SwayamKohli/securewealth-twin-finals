@@ -1,9 +1,13 @@
+import logging
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 
 from models.user import User
 from schemas.wealth.fraud_schema import FraudRequest, FraudResponse
 from ai.engines.fraud_engine import FraudIntelligenceEngine
+
+
+logger = logging.getLogger(__name__)
 
 
 class FraudService:
@@ -46,5 +50,5 @@ class FraudService:
             
         except Exception as e:
             # Log the error appropriately
-            print(f"Error in fraud evaluation: {str(e)}")
+            logger.exception("Error in fraud evaluation")
             raise

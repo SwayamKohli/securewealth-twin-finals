@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
@@ -7,6 +8,9 @@ from schemas.security.decision_schema import TransactionContext, DecisionRecord
 from security.decision_engine import DecisionEngine, TransactionContext as EngineTxnCtx
 from security.risk_engine import RiskEvaluationInput as EngineRiskInput, EnvironmentInput as EngineEnvInput
 from security.behavior_engine import BehaviorEngine, BehaviorInput as BehInput, BehaviorSignals
+
+
+logger = logging.getLogger(__name__)
 
 
 class DecisionService:
@@ -95,5 +99,5 @@ class DecisionService:
             )
             
         except Exception as e:
-            print(f"Error in decision making: {str(e)}")
+            logger.exception("Error in decision making")
             raise

@@ -28,6 +28,7 @@ Sources:
   [24] RBI Fraud Monitoring Circular (2024) — velocity / session scoring
 """
 
+import logging
 import pickle
 from pathlib import Path
 
@@ -35,6 +36,8 @@ import joblib
 import numpy as np
 
 from ai.utils.feature_engineering import FEATURE_COLS, FraudFeatureEngineer
+
+logger = logging.getLogger(__name__)
 
 # ─── Default model paths ───────────────────────────────────────────────────────
 _MODELS_DIR = Path(__file__).parent / "models"
@@ -75,21 +78,39 @@ class FraudIntelligenceEngine:
         self._baselines     = user_baselines
         self._feature_cols  = feature_cols or FEATURE_COLS
 
-        # Validate feature alignment between saved model and current code
-        # assert self._feature_cols == FEATURE_COLS, (
-        #     "Feature column mismatch! Re-run the training notebook to regenerate artifacts."
-        # )
-        print("Loaded features:")
-        print(self._feature_cols)
+        # ── Feature alignment ──────────────────────────────────────────────
+        # The shipped model may have been trained on a different feature set
+        # than feature_engineering.FEATURE_COLS. Both are 22 columns wide, so a
+        # mismatch would NOT crash — the model would silently receive values in
+        # the wrong semantic positions and emit meaningless probabilities.
+        #
+        # When the saved columns don't match the current ones, we build the
+        # model's ORIGINAL feature vector via LegacyFeatureAdapter so the
+        # trained weights stay usable and correct.
+        self._feature_mode = "native"
+        if list(self._feature_cols) != list(FEATURE_COLS):
+            from ai.utils.legacy_feature_adapter import (
+                LEGACY_FEATURE_COLS,
+                LegacyFeatureAdapter,
+            )
 
-        print("\nCurrent features:")
-        print(FEATURE_COLS)
-
-        print("\nMissing:")
-        print(set(FEATURE_COLS) - set(self._feature_cols))
-
-        print("\nExtra:")
-        print(set(self._feature_cols) - set(FEATURE_COLS))
+            if list(self._feature_cols) == LEGACY_FEATURE_COLS:
+                self._engineer = LegacyFeatureAdapter(user_baselines)
+                self._feature_mode = "legacy_adapter"
+                logger.info(
+                    "FraudEngine: model uses the legacy feature set — "
+                    "LegacyFeatureAdapter engaged (%d features).",
+                    len(LEGACY_FEATURE_COLS),
+                )
+            else:
+                self._feature_mode = "unaligned"
+                logger.warning(
+                    "FraudEngine: saved model features do not match either known "
+                    "feature set. ML probability will be treated as low-confidence. "
+                    "Missing=%s Extra=%s",
+                    sorted(set(FEATURE_COLS) - set(self._feature_cols)),
+                    sorted(set(self._feature_cols) - set(FEATURE_COLS)),
+                )
 
     # ── Factory constructor ────────────────────────────────────────────────────
 
@@ -177,10 +198,16 @@ class FraudIntelligenceEngine:
         shap_vals = self._explainer.shap_values(X_scaled)[0]
 
         # ── Fusion: 50% rules + 50% ML [implementation_plan.md] ───────────
-        fraud_probability = min((rule_score * 0.50) + (xgb_prob * 0.50), 1.0)
-
-        # Confidence = how much the two layers agree (1 = perfect agreement)
-        confidence = round(1.0 - abs(rule_score - xgb_prob), 3)
+        # If the model's feature contract could not be aligned, its output is
+        # not trustworthy — fall back to the rule layer rather than blending in
+        # noise, and report low confidence so the Risk Engine down-weights it.
+        if self._feature_mode == "unaligned":
+            fraud_probability = rule_score
+            confidence = 0.30
+        else:
+            fraud_probability = min((rule_score * 0.50) + (xgb_prob * 0.50), 1.0)
+            # Confidence = how much the two layers agree (1 = perfect agreement)
+            confidence = round(1.0 - abs(rule_score - xgb_prob), 3)
 
         return {
             "fraud_probability": round(fraud_probability, 3),
@@ -192,6 +219,7 @@ class FraudIntelligenceEngine:
                 "shap_top_features": self._top_shap(shap_vals, n=5),
             },
             "baseline_used": baseline_source,
+            "feature_mode": self._feature_mode,
         }
 
     # ── Signal Scoring — Layer A ───────────────────────────────────────────────

@@ -69,6 +69,10 @@ class Behavior:
     # Large amount spike (z-score vs user's own history)
     AMOUNT_SPIKE_ZSCORE   = 3.0    # amount > mean + 3*std -> spike
     AMOUNT_SPIKE_MULTIPLE = 3.0    # OR amount > 3x the 90-day median
+    # An investment far beyond the customer's normal size is treated as a
+    # distinct, more serious signal. Banks step up verification on outliers of
+    # this magnitude regardless of how clean the rest of the picture looks.
+    AMOUNT_SPIKE_EXTREME_MULTIPLE = 10.0   # amount > 10x the 90-day median
 
     # OTP behavioural deviation (IJIS 2021 / NIST SP 800-63B)
     OTP_DISTRESS_MS = 2500         # < 2.5s -> coercion / bot
@@ -91,6 +95,7 @@ BEHAVIOR_PENALTY = {
     "otp_distress":         60,
     "otp_relay":            40,
     "round_number_anomaly": 45,
+    "extreme_amount_spike": 80,
 }
 BEHAVIOR_PENALTY_CAP = 100   # behavioural sub-score capped at 100
 
@@ -193,10 +198,19 @@ class Challenge:
     SELECTION_ORDER = [
         ("new_device",    DEVICE_CONFIRMATION),
         ("otp_distress",  OTP_RECONFIRMATION),
+        ("extreme_amount_spike", TRANSACTION_CONFIRMATION),
         ("amount_spike",  TRANSACTION_CONFIRMATION),
         ("night_owl",     RISK_WARNING_ACCEPTANCE),
     ]
     DEFAULT = RISK_WARNING_ACCEPTANCE
+
+    # Signals that ALWAYS require step-up verification, whatever the numeric
+    # score says. A very large outlier investment must be confirmed by the
+    # customer even when the device and location look perfectly normal.
+    MANDATORY_CHALLENGE_SIGNALS = frozenset({
+        "extreme_amount_spike",
+        "otp_relay",
+    })
 
 
 # ============================================================
@@ -210,10 +224,19 @@ class UnknownRisk:
     MEDIUM_SEVERITY_MAX = 0.85   # 0.60 < conf <= 0.85 -> MEDIUM -> CHALLENGE
     # confidence > 0.85 -> HIGH -> BLOCK
 
+    # Blueprint §7 (Zero-Day Resilience): an UNKNOWN pattern is not proof of
+    # fraud — it is proof we have never seen this before. The prescribed
+    # response is "Elevated Risk → Additional Verification → Audit Logging →
+    # Human Review", i.e. CHALLENGE the customer rather than refuse them.
+    #
+    # A hard BLOCK is reserved for the case where novelty is combined with an
+    # already-high risk score (handled by the Decision Engine taking the
+    # STRICTER of the two decisions), so a genuinely dangerous transaction is
+    # still stopped while a merely unusual one is simply verified.
     SEVERITY_TO_DECISION = {
         "LOW":    DECISION_WARN,
         "MEDIUM": DECISION_CHALLENGE,
-        "HIGH":   DECISION_BLOCK,
+        "HIGH":   DECISION_CHALLENGE,
     }
 
 

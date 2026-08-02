@@ -56,6 +56,7 @@ class BehaviorSignals:
     night_owl: bool = False
     velocity_burst: bool = False
     amount_spike: bool = False
+    extreme_amount_spike: bool = False
     new_recipient: bool = False
     otp_distress: bool = False
     otp_relay: bool = False
@@ -66,6 +67,7 @@ class BehaviorSignals:
             "night_owl":            self.night_owl,
             "velocity_burst":       self.velocity_burst,
             "amount_spike":         self.amount_spike,
+            "extreme_amount_spike": self.extreme_amount_spike,
             "new_recipient":        self.new_recipient,
             "otp_distress":         self.otp_distress,
             "otp_relay":            self.otp_relay,
@@ -99,6 +101,10 @@ class BehaviorEngine:
         z      = (inp.amount - median) / std
         sig.amount_spike = (z >= Behavior.AMOUNT_SPIKE_ZSCORE) or \
                            (inp.amount > median * Behavior.AMOUNT_SPIKE_MULTIPLE)
+        # Severity tier: a far larger outlier is its own, stronger signal.
+        sig.extreme_amount_spike = (
+            inp.amount > median * Behavior.AMOUNT_SPIKE_EXTREME_MULTIPLE
+        )
 
         # --- New recipient risk ---
         sig.new_recipient = bool(inp.recipient_id) and inp.recipient_id not in inp.known_recipients
