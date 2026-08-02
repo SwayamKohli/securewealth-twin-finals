@@ -9,14 +9,12 @@
 //       │   ├── Tab: Home
 //       │   │   └── HomeStack
 //       │   │       └── DashboardScreen
-//       │   ├── Tab: Send Money
-//       │   │   └── SendStack
-//       │   │       ├── TransactionInitiateScreen
+//       │   ├── Tab: Wealth  (LANDING TAB — wealth-first)
+//       │   │   └── WealthStack
+//       │   │       ├── WealthOverviewScreen
+//       │   │       ├── TransactionInitiateScreen (Invest)
 //       │   │       ├── SecurityReviewScreen
 //       │   │       └── TransactionResultScreen
-//       │   ├── Tab: My Wealth
-//       │   │   └── WealthStack
-//       │   │       └── WealthOverviewScreen
 //       │   ├── Tab: Safety
 //       │   │   └── SafetyStack
 //       │   │       ├── SafetyHubScreen
@@ -25,8 +23,7 @@
 //       │   └── Tab: Profile
 //       │       └── ProfileStack
 //       │           └── ProfileScreen (placeholder)
-//       └── AuditModal (Modal — admin only, from Profile)
-//           └── AuditDashboardScreen
+//   (Admin audit dashboard REMOVED from mobile — it is a standalone web app.)
 
 import React, { useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
@@ -37,10 +34,12 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { COLORS } from '../constants/colors';
+import { useI18n, LANGUAGES } from '../i18n';
 import { TYPOGRAPHY, SPACING, BORDER_RADIUS, SHADOWS, TAB_BAR, ANIMATION } from '../constants/theme';
 
 // ── Screens ──────────────────────────────────────────────────────────────────
 import AuthScreen from '../screens/AuthScreen';
+import RegisterScreen from '../screens/RegisterScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import TransactionInitiateScreen from '../screens/TransactionInitiateScreen';
 import SecurityReviewScreen from '../screens/SecurityReviewScreen';
@@ -49,15 +48,20 @@ import WealthOverviewScreen from '../screens/WealthOverviewScreen';
 import SafetyHubScreen from '../screens/SafetyHubScreen';
 import PhishingScannerScreen from '../screens/PhishingScannerScreen';
 import MySecurityActivityScreen from '../screens/MySecurityActivityScreen';
-import AuditDashboardScreen from '../screens/AuditDashboardScreen';
+import ChallengeScreen from '../screens/ChallengeScreen';
+import ProfileScreen from '../screens/ProfileScreen';
+import ErrorBoundary from '../components/ErrorBoundary';
+// REMOVED (admin dashboard is now a STANDALONE WEB APP — /admin-dashboard).
+// Kept commented for reference; the mobile app must not expose admin tooling.
+// import AuditDashboardScreen from '../screens/AuditDashboardScreen';
 
 // ── Navigator instances ──────────────────────────────────────────────────────
 const RootStack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 const HomeStack = createStackNavigator();
-const SendStack = createStackNavigator();
 const WealthStack = createStackNavigator();
 const SafetyStack = createStackNavigator();
+const PhishingStack = createStackNavigator();
 const ProfileStack = createStackNavigator();
 
 // ── Shared header options ────────────────────────────────────────────────────
@@ -118,6 +122,9 @@ const HomeStackNavigator = ({ handleLogout }: { handleLogout: () => void }) => (
               style={styles.headerIconBtn}
               onPress={() => navigation.navigate('Notifications')}
               activeOpacity={0.7}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="button"
+              accessibilityLabel="Notifications"
             >
               <Feather name="bell" size={22} color={COLORS.textOnDark} />
               {/* Notification dot */}
@@ -127,6 +134,9 @@ const HomeStackNavigator = ({ handleLogout }: { handleLogout: () => void }) => (
               style={[styles.headerIconBtn, { marginLeft: SPACING.sm }]}
               onPress={handleLogout}
               activeOpacity={0.7}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="button"
+              accessibilityLabel="Sign out"
             >
               <Feather name="log-out" size={20} color={COLORS.textOnDark} />
             </TouchableOpacity>
@@ -135,37 +145,6 @@ const HomeStackNavigator = ({ handleLogout }: { handleLogout: () => void }) => (
       })}
     />
   </HomeStack.Navigator>
-);
-
-// ── Tab 2: Send Money Stack ──────────────────────────────────────────────────
-const SendStackNavigator = () => (
-  <SendStack.Navigator screenOptions={sharedStackScreenOptions}>
-    <SendStack.Screen
-      name="TransactionInitiate"
-      component={TransactionInitiateScreen}
-      options={{ title: 'Send Money' }}
-    />
-    <SendStack.Screen
-      name="SecurityReview"
-      component={SecurityReviewScreen}
-      options={{
-        title: 'Security Check',
-        // Prevent going back mid-review (security flow)
-        headerLeft: () => null,
-        gestureEnabled: false,
-      }}
-    />
-    <SendStack.Screen
-      name="TransactionResult"
-      component={TransactionResultScreen}
-      options={{
-        title: 'Payment Status',
-        // Prevent going back to result (flow is complete)
-        headerLeft: () => null,
-        gestureEnabled: false,
-      }}
-    />
-  </SendStack.Navigator>
 );
 
 // ── Tab 3: My Wealth Stack ───────────────────────────────────────────────────
@@ -189,8 +168,64 @@ const WealthStackNavigator = () => (
         },
       }}
     />
-    {/* Future: DepositDetailScreen, LoanDetailScreen will be added here */}
+    {/* Task 1.2/2.3 — Invest flow lives INSIDE Wealth (wealth-first UX) */}
+    <WealthStack.Screen
+      name="TransactionInitiate"
+      component={TransactionInitiateScreen}
+      options={{ title: 'Invest' }}
+    />
+    <WealthStack.Screen
+      name="SecurityReview"
+      component={SecurityReviewScreen}
+      options={{
+        title: 'Security Check',
+        headerLeft: () => null,
+        gestureEnabled: false,
+      }}
+    />
+    <WealthStack.Screen
+      name="Challenge"
+      component={ChallengeScreen}
+      options={{
+        title: 'Verify Identity',
+        headerLeft: () => null,
+        gestureEnabled: false,
+      }}
+    />
+    <WealthStack.Screen
+      name="TransactionResult"
+      component={TransactionResultScreen}
+      options={{
+        title: 'Investment Status',
+        headerLeft: () => null,
+        gestureEnabled: false,
+      }}
+    />
   </WealthStack.Navigator>
+);
+
+// ── Phishing Protection Stack (dedicated tab, task 1.1) ──────────────────────
+const PhishingStackNavigator = () => (
+  <PhishingStack.Navigator screenOptions={sharedStackScreenOptions}>
+    <PhishingStack.Screen
+      name="PhishingScanner"
+      component={PhishingScannerScreen}
+      options={{
+        title: 'Phishing Protection',
+        headerStyle: {
+          backgroundColor: COLORS.primaryDark,
+          elevation: 0,
+          shadowOpacity: 0,
+        },
+        headerTintColor: COLORS.textOnDark,
+        headerTitleStyle: {
+          ...TYPOGRAPHY.h4,
+          color: COLORS.textOnDark,
+          fontWeight: '700',
+        },
+      }}
+    />
+  </PhishingStack.Navigator>
 );
 
 // ── Tab 4: Safety Stack ──────────────────────────────────────────────────────
@@ -203,7 +238,7 @@ const SafetyStackNavigator = () => (
       name="SafetyHub"
       component={SafetyHubScreen}
       options={{
-        title: 'Safety',
+        title: 'Security',
         headerStyle: {
           backgroundColor: COLORS.primaryDark,
           elevation: 0,
@@ -218,11 +253,6 @@ const SafetyStackNavigator = () => (
       }}
     />
     <SafetyStack.Screen
-      name="PhishingScanner"
-      component={PhishingScannerScreen}
-      options={{ title: 'Check a Message' }}
-    />
-    <SafetyStack.Screen
       name="MySecurityActivity"
       component={MySecurityActivityScreen}
       options={{ title: 'My Security Activity' }}
@@ -231,31 +261,49 @@ const SafetyStackNavigator = () => (
 );
 
 // ── Tab 5: Profile Stack ─────────────────────────────────────────────────────
-// Placeholder profile screen until ProfileScreen is built
-const PlaceholderProfileScreen = ({ navigation }: any) => (
-  <View style={styles.placeholder}>
-    <Feather name="user" size={48} color={COLORS.textTertiary} />
-    <Text style={styles.placeholderTitle}>My Profile</Text>
-    <Text style={styles.placeholderSub}>Profile settings coming soon</Text>
-    {/* Admin audit access — only shown here, not in user-facing tabs */}
-    <TouchableOpacity
-      style={styles.adminBtn}
-      onPress={() => navigation.navigate('AuditModal')}
-      activeOpacity={0.8}
-    >
-      <Feather name="shield" size={16} color={COLORS.textOnDark} />
-      <Text style={styles.adminBtnText}>Admin: Audit Dashboard</Text>
-    </TouchableOpacity>
-  </View>
-);
+// REPLACED (M1 task 3) — the real ProfileScreen now shows live identity,
+// registered devices with trust status, the aggregation consent toggle, the
+// language switcher and a proper server-side logout. Kept here, commented out,
+// as a record of the mid-evaluation placeholder.
+// const PlaceholderProfileScreen = ({ navigation }: any) => {
+//   const { t, language, setLanguage } = useI18n();
+//   return (
+//   <View style={styles.placeholder}>
+//     <Feather name="user" size={48} color={COLORS.textTertiary} />
+//     <Text style={styles.placeholderTitle}>{t('profile.title')}</Text>
+//
+//     {/* Task 1.5 — language switcher (EN / HI / PA) */}
+//     <Text style={styles.langLabel}>{t('profile.chooseLanguage')}</Text>
+//     <View style={styles.langRow}>
+//       {LANGUAGES.map((l) => (
+//         <TouchableOpacity
+//           key={l.code}
+//           style={[styles.langBtn, language === l.code && styles.langBtnActive]}
+//           onPress={() => setLanguage(l.code)}
+//           activeOpacity={0.8}
+//         >
+//           <Text
+//             style={[
+//               styles.langBtnText,
+//               language === l.code && styles.langBtnTextActive,
+//             ]}
+//           >
+//             {l.native}
+//           </Text>
+//         </TouchableOpacity>
+//       ))}
+//     </View>
+//     // REMOVED — the Admin Audit Dashboard is a separate WEB application
+//     // (/admin-dashboard). Customers must never see admin tooling.
+//   </View>
+//   );
+// };
 
-const ProfileStackNavigator = () => (
+const ProfileStackNavigator = ({ handleLogout }: { handleLogout: () => void }) => (
   <ProfileStack.Navigator screenOptions={sharedStackScreenOptions}>
-    <ProfileStack.Screen
-      name="Profile"
-      component={PlaceholderProfileScreen}
-      options={{ title: 'My Profile' }}
-    />
+    <ProfileStack.Screen name="Profile" options={{ title: 'My Profile' }}>
+      {() => <ProfileScreen handleLogout={handleLogout} />}
+    </ProfileStack.Screen>
     {/* Future: TrustedDevicesScreen, SecuritySettingsScreen */}
   </ProfileStack.Navigator>
 );
@@ -270,13 +318,15 @@ type TabBarProps = {
 
 const CustomTabBar = ({ state, descriptors, navigation }: TabBarProps) => {
   const insets = useSafeAreaInsets();
+  const { t } = useI18n();
 
+  // Task 1.1 — Wealth-first navigation order (labels localised, task 1.5)
   const tabs = [
-    { icon: 'home', label: 'Home' },
-    { icon: 'send', label: 'Send' },
-    { icon: 'trending-up', label: 'My Wealth' },
-    { icon: 'shield', label: 'Safety' },
-    { icon: 'user', label: 'Profile' },
+    { icon: 'home', label: t('tab.home') },
+    { icon: 'trending-up', label: t('tab.wealth') },
+    { icon: 'shield', label: t('tab.security') },
+    { icon: 'message-square', label: t('tab.phishing') },
+    { icon: 'user', label: t('tab.profile') },
   ] as const;
 
   return (
@@ -344,14 +394,17 @@ const MainTabs = ({ handleLogout }: { handleLogout: () => void }) => (
   <Tab.Navigator
     tabBar={(props) => <CustomTabBar {...props} />}
     screenOptions={{ headerShown: false }}
+    initialRouteName="WealthTab"
   >
     <Tab.Screen name="HomeTab">
       {() => <HomeStackNavigator handleLogout={handleLogout} />}
     </Tab.Screen>
-    <Tab.Screen name="SendTab" component={SendStackNavigator} />
     <Tab.Screen name="WealthTab" component={WealthStackNavigator} />
     <Tab.Screen name="SafetyTab" component={SafetyStackNavigator} />
-    <Tab.Screen name="ProfileTab" component={ProfileStackNavigator} />
+    <Tab.Screen name="PhishingTab" component={PhishingStackNavigator} />
+    <Tab.Screen name="ProfileTab">
+      {() => <ProfileStackNavigator handleLogout={handleLogout} />}
+    </Tab.Screen>
   </Tab.Navigator>
 );
 
@@ -365,30 +418,39 @@ const RootNavigator = ({ handleLogout }: { handleLogout: () => void }) => (
       {() => <MainTabs handleLogout={handleLogout} />}
     </RootStack.Screen>
 
-    {/* Admin-only: full-screen modal audit dashboard */}
+    {/* REMOVED — audit is a standalone web dashboard now (/admin-dashboard).
     <RootStack.Screen
       name="AuditModal"
       component={AuditDashboardScreen}
       options={{
         headerShown: true,
         title: 'Security Audit Logs',
-        headerStyle: {
-          backgroundColor: COLORS.primaryDark,
-          elevation: 0,
-          shadowOpacity: 0,
-        },
+        headerStyle: { backgroundColor: COLORS.primaryDark },
         headerTintColor: COLORS.textOnDark,
-        headerTitleStyle: {
-          ...TYPOGRAPHY.h4,
-          color: COLORS.textOnDark,
-        },
-        presentation: 'fullScreenModal',
+        presentation: 'modal',
       }}
     />
+    */}
   </RootStack.Navigator>
 );
 
 // ── App Navigator (auth gate) ─────────────────────────────────────────────────
+// ── Auth stack: Sign in → Open an account ────────────────────────────────────
+const AuthStack = createStackNavigator();
+
+const AuthNavigator = ({ onLoginSuccess }: { onLoginSuccess: (ok: boolean) => void }) => (
+  <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+    <AuthStack.Screen name="SignIn">
+      {(props) => <AuthScreen {...props} onLoginSuccess={onLoginSuccess} />}
+    </AuthStack.Screen>
+    <AuthStack.Screen
+      name="Register"
+      component={RegisterScreen}
+      options={{ gestureEnabled: true }}
+    />
+  </AuthStack.Navigator>
+);
+
 const AppNavigator = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
@@ -401,14 +463,17 @@ const AppNavigator = () => {
   }, []);
 
   return (
-    <NavigationContainer>
-      {!isLoggedIn ? (
-        // Auth is rendered directly — no navigator wrapper so no header
-        <AuthScreen onLoginSuccess={handleLogin} />
-      ) : (
-        <RootNavigator handleLogout={handleLogout} />
-      )}
-    </NavigationContainer>
+    // Task 21 — a render error anywhere in the tree shows a recoverable screen
+    // that states plainly that no money moved, instead of a white screen.
+    <ErrorBoundary>
+      <NavigationContainer>
+        {!isLoggedIn ? (
+          <AuthNavigator onLoginSuccess={handleLogin} />
+        ) : (
+          <RootNavigator handleLogout={handleLogout} />
+        )}
+      </NavigationContainer>
+    </ErrorBoundary>
   );
 };
 
@@ -481,6 +546,37 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.h3,
     color: COLORS.text,
     marginTop: SPACING.sm,
+  },
+  langLabel: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textSecondary,
+    marginTop: SPACING.lg,
+    marginBottom: SPACING.sm,
+  },
+  langRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  langBtn: {
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+  },
+  langBtnActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  langBtnText: {
+    ...TYPOGRAPHY.body,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  langBtnTextActive: {
+    color: COLORS.textOnDark,
   },
   placeholderSub: {
     ...TYPOGRAPHY.bodySm,

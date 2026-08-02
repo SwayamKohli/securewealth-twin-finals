@@ -23,20 +23,22 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../constants/colors';
+import { useI18n } from '../i18n';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import GlossaryPopup from '../components/common/GlossaryPopup';
 import { api, ApiError } from '../api/apiService';
+import { ensureDeviceRegistered } from '../api/deviceSession';
 
 interface AuthScreenProps {
+  navigation?: any;
   onLoginSuccess: (success: boolean) => void;
 }
 
 // Demo credentials — used as a convenience fallback for the Biometric button.
-const DEMO_PHONE = '9999999999';
-const DEMO_MPIN = '123456';
 const MPIN_LENGTH = 6;
 
-const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
+const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess, navigation }) => {
+  const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const [phone, setPhone] = useState('');
   const [mpin, setMpin] = useState('');
@@ -44,8 +46,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
   const inputRef = useRef<TextInput>(null);
 
   const handlePhoneChange = (text: string) => {
-    // Keep digits only, allow up to 15 (API accepts 10-15).
-    setPhone(text.replace(/[^\d]/g, '').slice(0, 15));
+    // SecureWealth ID: alphanumeric, e.g. SW10000001 (bank CIF-style).
+    setPhone(text.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 20));
   };
 
   const handleMpinChange = (text: string) => {
@@ -54,22 +56,30 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
   };
 
   // Shared login routine used by both the MPIN button and biometric fallback.
-  const doLogin = async (loginPhone: string, loginMpin: string) => {
+  const doLogin = async (loginId: string, loginMpin: string) => {
     setIsLoading(true);
     try {
-      await api.login({ phone: loginPhone, mpin: loginMpin });
+      await api.login({ login_id: loginId, mpin: loginMpin });
+
+      // Register this physical device so the risk engine can score device
+      // trust for real instead of treating every session as unknown.
+      // Deliberately not awaited-on-failure: banking must not be blocked if
+      // registration fails — the backend then applies stricter checks, which
+      // is the correct fail-safe direction.
+      ensureDeviceRegistered().catch(() => undefined);
+
       onLoginSuccess(true);
     } catch (e) {
       const err = e as ApiError;
       let title = 'Login Failed';
       let message = 'Something went wrong. Please try again.';
       if (err instanceof ApiError) {
-        if (err.isNetworkError) {
+        if (err.isConnectivityError) {
           title = 'Connection Problem';
           message = err.message;
         } else if (err.status === 401 || err.status === 400) {
           title = 'Incorrect Details';
-          message = 'Your phone number or MPIN is incorrect. Please try again.';
+          message = 'Your SecureWealth ID or MPIN is incorrect. Please try again.';
         } else {
           message = err.message;
         }
@@ -81,8 +91,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
   };
 
   const handleLogin = async () => {
-    if (phone.length < 10) {
-      Alert.alert('Enter your phone number', 'Please enter your registered phone number.');
+    if (phone.length < 6) {
+      Alert.alert('Enter your SecureWealth ID', 'Please enter your SecureWealth ID (e.g. SW10000001).');
       return;
     }
     if (mpin.length !== MPIN_LENGTH) {
@@ -93,10 +103,22 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
   };
 
   const handleBiometric = async () => {
-    // Biometric convenience path: use entered phone if present, else demo phone,
-    // with the demo MPIN. Still performs a real API login + JWT storage.
-    const loginPhone = phone.length >= 10 ? phone : DEMO_PHONE;
-    await doLogin(loginPhone, DEMO_MPIN);
+    // Biometric is a convenience layer over the same credentials — it never
+    // bypasses them. Hardware biometrics need a development build, so on
+    // Expo Go we tell the customer plainly rather than pretending.
+    if (phone.length < 6) {
+      Alert.alert(
+        'Enter your SecureWealth ID first',
+        'Biometric sign-in unlocks your saved MPIN. Enter your SecureWealth ID, '
+          + 'then sign in with your MPIN once to enable it.'
+      );
+      return;
+    }
+    Alert.alert(
+      'Biometric sign-in',
+      'Face and fingerprint unlock require the installed app. Please sign in '
+        + 'with your MPIN for now.'
+    );
   };
 
   const handleForgotMpin = () => {
@@ -130,15 +152,17 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
           {/* Avatar + greeting */}
           <View style={styles.avatarWrap}>
             <View style={styles.avatar}>
-              <Feather name="user" size={32} color={COLORS.primary} />
+              <Feather name="user" size={30} color={COLORS.primary} />
             </View>
-            <Text style={styles.userName}>Welcome Back</Text>
-            <Text style={styles.lastLogin}>Sign in to continue</Text>
+            <Text style={styles.userName} numberOfLines={1}>
+              {t('auth.welcomeBack')}
+            </Text>
+            <Text style={styles.lastLogin}>{t('auth.signInContinue')}</Text>
           </View>
 
           {/* Phone label */}
           <View style={styles.mpinLabelRow}>
-            <Text style={styles.mpinLabel}>Phone Number</Text>
+            <Text style={styles.mpinLabel}>{t('auth.secureWealthId')}</Text>
           </View>
 
           {/* Phone input */}
@@ -146,8 +170,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             style={styles.phoneInput}
             value={phone}
             onChangeText={handlePhoneChange}
-            keyboardType="phone-pad"
-            placeholder="Enter registered phone number"
+            autoCapitalize="characters"
+            placeholder="e.g. SW10000001"
             placeholderTextColor={COLORS.textTertiary}
             maxLength={15}
             editable={!isLoading}
@@ -155,7 +179,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
 
           {/* MPIN label + glossary */}
           <View style={styles.mpinLabelRow}>
-            <Text style={styles.mpinLabel}>Enter your MPIN</Text>
+            <Text style={styles.mpinLabel}>{t('auth.enterMpin')}</Text>
             <GlossaryPopup term="MPIN">
               <Feather name="help-circle" size={15} color={COLORS.textTertiary} />
             </GlossaryPopup>
@@ -166,6 +190,11 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             style={styles.dotsRow}
             onPress={() => inputRef.current?.focus()}
             activeOpacity={0.8}
+            // Full-width row, already far above the 44px minimum; hitSlop is
+            // declared so the intent is explicit rather than incidental.
+            hitSlop={{ top: 8, bottom: 8, left: 0, right: 0 }}
+            accessibilityRole="button"
+            accessibilityLabel={t('auth.mpin')}
           >
             {Array.from({ length: MPIN_LENGTH }).map((_, i) => (
               <View
@@ -193,15 +222,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
           <TouchableOpacity
             style={[
               styles.primaryBtn,
-              (mpin.length !== MPIN_LENGTH || phone.length < 10 || isLoading) &&
+              (mpin.length !== MPIN_LENGTH || phone.length < 6 || isLoading) &&
                 styles.primaryBtnDisabled,
             ]}
             onPress={handleLogin}
-            disabled={mpin.length !== MPIN_LENGTH || phone.length < 10 || isLoading}
+            disabled={mpin.length !== MPIN_LENGTH || phone.length < 6 || isLoading}
             activeOpacity={0.8}
           >
             <Text style={styles.primaryBtnText}>
-              {isLoading ? 'Logging in\u2026' : 'Login with MPIN'}
+              {isLoading ? t('auth.loggingIn') : t('auth.loginMpin')}
             </Text>
           </TouchableOpacity>
 
@@ -213,28 +242,31 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             activeOpacity={0.8}
           >
             <Feather name="activity" size={18} color={COLORS.primary} />
-            <Text style={styles.biometricBtnText}>Login with Biometric</Text>
+            <Text style={styles.biometricBtnText}>{t('auth.loginBiometric')}</Text>
           </TouchableOpacity>
 
           {/* Forgot MPIN */}
           <TouchableOpacity style={styles.forgotBtn} onPress={handleForgotMpin}>
-            <Text style={styles.forgotText}>Forgot MPIN?</Text>
+            <Text style={styles.forgotText}>{t('auth.forgotMpin')}</Text>
           </TouchableOpacity>
 
-          {/* Demo note */}
-          <View style={styles.demoNote}>
-            <Feather name="info" size={13} color={COLORS.accentDark} />
-            <Text style={styles.demoNoteText}>
-              Demo mode — MPIN <Text style={styles.demoMpin}>{DEMO_MPIN}</Text> or tap Biometric
-            </Text>
+          {/* New customer */}
+          <View style={styles.registerRow}>
+            <Text style={styles.registerText}>{t('auth.noAccount')}</Text>
+            <TouchableOpacity
+              onPress={() => navigation?.navigate('Register')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.registerLink}>{t('auth.openNow')}</Text>
+            </TouchableOpacity>
           </View>
 
           {/* Security assurance strip */}
           <View style={styles.securityStrip}>
             {[
-              { icon: 'shield', text: 'Fraud detection active' },
-              { icon: 'lock', text: 'End-to-end encrypted' },
-              { icon: 'eye-off', text: 'Zero data sharing' },
+              { icon: 'shield', text: t('auth.fraudActive') },
+              { icon: 'lock', text: t('auth.encrypted') },
+              { icon: 'eye-off', text: t('auth.noSharing') },
             ].map((item, i) => (
               <View key={i} style={styles.securityItem}>
                 <Feather name={item.icon as any} size={14} color={COLORS.primary} />
@@ -261,12 +293,12 @@ const styles = StyleSheet.create({
   hero: {
     backgroundColor: COLORS.primaryDark,
     alignItems: 'center',
-    paddingBottom: SPACING.xxl,
+    paddingBottom: SPACING.xl,
     paddingHorizontal: SPACING.xl,
   },
   logoWrap: {
-    width: 72,
-    height: 72,
+    width: 64,
+    height: 64,
     borderRadius: BORDER_RADIUS.full,
     backgroundColor: 'rgba(255,255,255,0.1)',
     justifyContent: 'center',
@@ -289,9 +321,9 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     backgroundColor: COLORS.background,
-    borderTopLeftRadius: BORDER_RADIUS.xxxl,
-    borderTopRightRadius: BORDER_RADIUS.xxxl,
-    marginTop: -BORDER_RADIUS.xl,
+    borderTopLeftRadius: BORDER_RADIUS.xxl,
+    borderTopRightRadius: BORDER_RADIUS.xxl,
+    marginTop: -SPACING.lg,
     paddingTop: SPACING.xl,
     paddingHorizontal: SPACING.xl,
   },
@@ -299,11 +331,12 @@ const styles = StyleSheet.create({
   // Avatar
   avatarWrap: {
     alignItems: 'center',
-    marginBottom: SPACING.xl,
+    alignSelf: 'stretch',
+    marginBottom: SPACING.lg,
   },
   avatar: {
-    width: 72,
-    height: 72,
+    width: 64,
+    height: 64,
     borderRadius: BORDER_RADIUS.full,
     backgroundColor: COLORS.primaryVeryLight,
     justifyContent: 'center',
@@ -312,27 +345,34 @@ const styles = StyleSheet.create({
     ...SHADOWS.small,
   },
   userName: {
-    ...TYPOGRAPHY.h4,
+    ...TYPOGRAPHY.h3,
     color: COLORS.text,
     fontWeight: '700',
+    textAlign: 'center',
+    alignSelf: 'stretch',
+    marginTop: SPACING.md,
     marginBottom: 2,
   },
   lastLogin: {
     ...TYPOGRAPHY.caption,
     color: COLORS.textTertiary,
+    textAlign: 'center',
+    alignSelf: 'stretch',
   },
 
   // Phone input
   phoneInput: {
-    ...TYPOGRAPHY.body,
+    ...TYPOGRAPHY.bodyMedium,
     color: COLORS.text,
     backgroundColor: COLORS.surface,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: COLORS.border,
     borderRadius: BORDER_RADIUS.lg,
     paddingVertical: SPACING.md,
     paddingHorizontal: SPACING.lg,
     marginBottom: SPACING.lg,
+    textAlign: 'center',
+    letterSpacing: 1.5,
   },
 
   // MPIN
@@ -341,7 +381,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: SPACING.xs,
-    marginBottom: SPACING.lg,
+    marginBottom: SPACING.sm,
   },
   mpinLabel: {
     ...TYPOGRAPHY.bodyMedium,
@@ -351,8 +391,10 @@ const styles = StyleSheet.create({
   dotsRow: {
     flexDirection: 'row',
     justifyContent: 'center',
+    alignItems: 'center',
     gap: SPACING.md,
-    marginBottom: SPACING.xl,
+    height: 44,
+    marginBottom: SPACING.lg,
   },
   dot: {
     width: 18,
@@ -408,14 +450,26 @@ const styles = StyleSheet.create({
   },
   forgotBtn: {
     alignSelf: 'center',
-    marginBottom: SPACING.xl,
+    paddingVertical: SPACING.sm,
+    marginBottom: SPACING.md,
   },
   forgotText: {
     ...TYPOGRAPHY.bodySmMedium,
     color: COLORS.primary,
   },
 
-  // Demo note
+  registerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: SPACING.xs,
+    paddingVertical: SPACING.sm,
+    marginBottom: SPACING.lg,
+  },
+  registerText: { ...TYPOGRAPHY.body, color: COLORS.textSecondary },
+  registerLink: { ...TYPOGRAPHY.bodyMedium, color: COLORS.primary, fontWeight: '700' },
+
   demoNote: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -437,6 +491,10 @@ const styles = StyleSheet.create({
   // Security strip
   securityStrip: {
     gap: SPACING.sm,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
+    paddingTop: SPACING.lg,
+    marginBottom: SPACING.lg,
   },
   securityItem: {
     flexDirection: 'row',
