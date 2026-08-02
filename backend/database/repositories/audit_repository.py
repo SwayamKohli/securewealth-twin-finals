@@ -78,9 +78,15 @@ class AuditRepository:
     def get_chain(
         self,
     ) -> list[AuditLog]:
+        # MUST be ordered by chain_index, not created_at.
+        # created_at uses func.now(), which in PostgreSQL is the TRANSACTION
+        # start time — records written in one transaction share a timestamp,
+        # so created_at ordering is non-deterministic. previous_hash linkage is
+        # built in chain_index order, so verification has to read it that way
+        # or the chain appears "broken" when it is perfectly intact.
         return (
             self.db.query(AuditLog)
-            .order_by(AuditLog.created_at.asc())
+            .order_by(AuditLog.chain_index.asc())
             .all()
         )
 
@@ -305,8 +311,6 @@ class AuditRepository:
         replacement: AuditLog,
     ) -> AuditLog:
         audit = self.get_by_id(audit_id)
-
-        print(">>> replace_master_record called")
 
         if audit is None:
             raise ValueError(f"Audit record {audit_id} not found.")

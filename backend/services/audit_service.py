@@ -29,6 +29,8 @@ class AuditEventType(str, Enum):
     TRANSACTION_SECURITY = "TRANSACTION_SECURITY"
     UNKNOWN_RISK = "UNKNOWN_RISK"
     CHALLENGE = "CHALLENGE"
+    # Task 4.3c — the customer said "this wasn't me" at the verification step.
+    CUSTOMER_REPORTED_FRAUD = "CUSTOMER_REPORTED_FRAUD"
     TAMPER_EVENT = "TAMPER_EVENT"
     RECOVERY_EVENT = "RECOVERY_EVENT"
 
@@ -390,6 +392,59 @@ class AuditService:
 
         return persisted
     
+    def log_tamper_event(
+        self,
+        audit_id: UUID,
+        corrupted_copies: list[str],
+        detail: dict[str, Any] | None = None,
+    ) -> AuditLog:
+        """
+        Records that tampering was DETECTED on an audit record.
+
+        Written before recovery runs, so the trail shows the attack and the
+        response as two separate, independently verifiable events.
+        """
+        where = ", ".join(corrupted_copies) or "unknown"
+        tamper_data = AuditLogData(
+            transaction_id=None,
+            user_id=None,
+            device_id=None,
+            account_id=None,
+
+            event_type=AuditEventType.TAMPER_EVENT,
+
+            final_decision="TAMPER_DETECTED",
+            risk_score=100,
+
+            amount=None,
+            channel=None,
+
+            ai_status=None,
+            ai_confidence=None,
+            unknown_risk_severity="HIGH",
+            unknown_risk_applied=False,
+            unknown_risk_decision=None,
+            unknown_risk_reason_code="AUDIT_TAMPER",
+
+            challenge_required=False,
+            challenge_type=None,
+            challenge_trigger_signal=None,
+
+            security_signals={
+                "tampered_audit_id": str(audit_id),
+                "corrupted_copies": corrupted_copies,
+                "comparison": detail or {},
+            },
+
+            audit_note=(
+                f"Tampering detected on audit record {audit_id} "
+                f"in: {where}. Majority consensus rejected the altered copy."
+            ),
+            compliance_reference=None,
+        )
+
+        return self.log_security_decision(tamper_data)
+
     def log_recovery_event(
         self,
         audit_id: UUID,

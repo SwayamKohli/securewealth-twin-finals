@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from typing import Any
 
 from models.audit import AuditLog
@@ -20,6 +22,9 @@ REPLICA_MODELS = {
     "audit_replica_2": AuditReplica2,
     "audit_replica_3": AuditReplica3,
 }
+
+
+logger = logging.getLogger("guardian.recovery")
 
 
 class RecoveryService:
@@ -63,7 +68,7 @@ class RecoveryService:
         repaired = []
 
         if "master" in verification.corrupted_copies:
-            print(">>> Repairing MASTER", verification.audit_id)
+            logger.info("Repairing MASTER copy of audit %s", verification.audit_id)
             self._repo.replace_master_record(
                 verification.audit_id,
                 source_record,
