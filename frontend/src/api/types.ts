@@ -34,11 +34,13 @@ export interface RegisterRequest {
 }
 export interface RegisterResponse {
   message: string;
+  customer_id?: string;
   user_id: string;
 }
 
 export interface LoginRequest {
-  phone: string;
+  /** SecureWealth ID (CIF-style), e.g. SW10000001. Phone login removed. */
+  login_id: string;
   mpin: string;
 }
 export interface LoginResponse {
@@ -53,6 +55,8 @@ export interface LogoutResponse {
 export interface SessionResponse {
   user_id: string;
   full_name: string;
+  /** Bank-issued SecureWealth ID — the login credential. */
+  customer_id?: string | null;
   phone: string;
   email: string | null;
   last_login: string | null;
@@ -130,8 +134,10 @@ export interface AccountSummaryResponse {
 export interface InitiateTransactionRequest {
   account_id: string;
   amount: number;
-  merchant_name: string;
-  merchant_category: string;
+  /** Mutual fund / SIP name (investment-only workflow). */
+  fund_name: string;
+  /** Approved mutual-fund category, e.g. EQUITY_MUTUAL_FUND. */
+  fund_category: string;
   channel: Channel;
 }
 export interface TransactionResponse {
@@ -139,14 +145,69 @@ export interface TransactionResponse {
   user_id: string;
   account_id: string;
   amount: number;
-  merchant_name: string;
-  merchant_category: string;
+  fund_name: string;
+  fund_category: string;
   channel: Channel | string;
   transaction_time: string;
   status: TxnStatus | string;
   decision: Decision | string | null;
   decision_timestamp: string | null;
   created_at: string;
+  // Security verdict (populated on /initiate)
+  risk_score?: number | null;
+  decision_report?: string | null;
+  challenge_required?: boolean | null;
+  challenge_type?: string | null;
+  /** Behavioural signals that actually fired, straight from the risk engine. */
+  triggered_signals?: string[];
+}
+
+// ── Challenge verification (task 4.3) ──
+export interface ChallengeStepResponse {
+  challenge_type: string;
+  trigger_signal: string;
+  steps: string[];
+  current_step: string | null;
+  step_number: number;
+  total_steps: number;
+  prompt: string;
+  completed: boolean;
+  attempts_left: number;
+  demo_otp?: string;
+  verified?: boolean;
+  message?: string;
+  transaction_status?: 'SUCCESS' | 'FAILED';
+  switched?: boolean;
+  resent?: boolean;
+  switched_methods?: { from: string; to: string; at: string }[];
+}
+export interface ChallengeMethodOption {
+  method: string;
+  label: string;
+  description: string;
+  is_current: boolean;
+  available: boolean;
+  unavailable_reason: string;
+  /** True when picking this method adds a compensating step. */
+  extra_step_required: boolean;
+  replaces_with: string[];
+}
+export interface ChallengeMethodsResponse {
+  current_step: string | null;
+  switchable: boolean;
+  methods: ChallengeMethodOption[];
+  note: string;
+}
+export interface ChallengeCancelResponse {
+  cancelled: boolean;
+  transaction_status: string;
+  reported: boolean;
+  message: string;
+  next_steps: string[];
+}
+export interface ChallengeVerifyRequest {
+  answer?: string;
+  acknowledged?: boolean;
 }
 export interface TransactionStatusResponse {
   transaction_id: string;
@@ -420,6 +481,8 @@ export interface BulkPhishingScanRequest {
 
 // ── Explainability ───────────────────────────────────────────────────────────
 export interface ExplainPhishingRequest {
+  /** Output language: en | hi | pa (task 5.5). */
+  language?: string;
   scan_result: PhishingScanResponse | Record<string, unknown>;
 }
 export interface ExplainPhishingResponse {
@@ -428,12 +491,40 @@ export interface ExplainPhishingResponse {
   risk_level: string;
   score: number;
 }
+// ── Device Trust Explainability (was built on the backend, never called) ──
+export interface ExplainDeviceTrustRequest {
+  trust_result: Record<string, unknown>;
+  user_profile: Record<string, unknown>;
+}
+export interface ExplainDeviceTrustResponse {
+  device_status: string;
+  device_confidence: number;
+  security_signals: string[];
+  customer_message: string;
+  generated_by: string;
+}
+
+// ── Challenge Explainability ──
+export interface ExplainChallengeRequest {
+  requirement: Record<string, unknown>;
+  language?: string;
+  ollama_url?: string;
+}
+export interface ExplainChallengeResponse {
+  explanation: string;
+  source: string;
+}
+
 export interface ExplainDecisionRequest {
   record: Record<string, unknown>;
   ollama_url?: string;
+  /** Task 5.5 — 'en' | 'hi' | 'pa'. Backend returns a localized narrative. */
+  language?: string;
 }
 export interface ExplainDecisionResponse {
   explanation: string;
+  /** 'llm' | 'template' | 'catalog' — what actually produced the text. */
+  source?: string;
 }
 export interface ExplainRiskRequest {
   output: Record<string, unknown>;
@@ -442,6 +533,28 @@ export interface ExplainRiskRequest {
 export interface ExplainWealthRequest {
   wealth_result: Record<string, unknown>;
   profile: Record<string, unknown>;
+}
+export interface WealthRecommendationExplanation {
+  recommendation_id: string;
+  recommendation: string;
+  product: string;
+  amount: number;
+  tenure: string;
+  /** Plain-language "why this?" — LLM-generated when available, else template. */
+  explanation: string;
+  expected_benefit: string;
+  priority: string;
+}
+export interface ExplainWealthResponse {
+  suppressed: boolean;
+  overview: string;
+  health_summary: string;
+  recommendation_explanations: WealthRecommendationExplanation[];
+  goal_summaries: unknown[];
+  disclaimer: string;
+  /** "llm" when Ollama answered, "template" otherwise — surfaced for honesty. */
+  generated_by: string;
+  financial_health: Record<string, unknown>;
 }
 
 // ── Health ───────────────────────────────────────────────────────────────────
