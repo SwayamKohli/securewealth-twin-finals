@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 
@@ -6,6 +7,9 @@ from schemas.wealth.wealth_schema import WealthRequest, WealthResponse
 from ai.engines.fraud_engine import FraudIntelligenceEngine
 from ai.engines.wealth_engine import WealthIntelligenceEngine
 from ai.engines.profile_builder import FinancialProfileBuilder
+
+
+logger = logging.getLogger(__name__)
 
 
 class WealthService:
@@ -21,11 +25,19 @@ class WealthService:
         try:
             # Build the financial profile from raw AA data
             profile = self.profile_builder.build_profile(request.profile_data)
-            
+
+            # Task 3.4: honour the fraud probability carried in the request
+            # (previously silently ignored) unless the caller passes a
+            # stricter value explicitly.
+            effective_fraud_probability = max(
+                fraud_probability,
+                float(getattr(request, "fraud_probability", 0.0) or 0.0),
+            )
+
             # Generate recommendations using the wealth engine
             result = self.wealth_engine.generate(
                 profile=profile,
-                fraud_probability=fraud_probability
+                fraud_probability=effective_fraud_probability
             )
             
             # Convert to response model
@@ -61,9 +73,10 @@ class WealthService:
                     }
                     for gs in result['goal_summaries']
                 ],
+                wealth_position=result.get('wealth_position'),  # Task 3.2: Net Worth
                 disclaimer=str(result['disclaimer'])  # Ensure string
             )
             
         except Exception as e:
-            print(f"Error in wealth recommendation generation: {str(e)}")
+            logger.exception("Error in wealth recommendation generation")
             raise

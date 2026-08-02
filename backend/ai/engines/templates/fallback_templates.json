@@ -1,0 +1,37 @@
+{
+  "_comment": "Deterministic wealth explanations used when the local LLM is unavailable. This file was referenced by wealth_explainability.py and recommendation_explainer.py but never existed, so every offline explanation collapsed to the generic 'Here is your customized wealth status report.' These templates make the no-Ollama path genuinely useful rather than merely non-crashing. Plain customer language: no scores, no engine names, no jargon.",
+
+  "disclaimer": "This is guidance based on your own account activity, not personalised investment advice. Mutual fund investments carry market risk. Please consult a SEBI-registered advisor before investing.",
+
+  "wealth_overview": {
+    "healthy": "Your finances are in good shape. You have a workable cushion for emergencies and room to keep investing steadily.",
+    "moderate": "Your finances are broadly on track, with one or two areas worth strengthening before you increase how much you invest.",
+    "stressed": "Your finances need attention before growth investing. Building a cash cushion and easing monthly commitments will do more for you right now than any new investment.",
+    "suppressed_fraud": "We have paused personalised suggestions while we finish some security checks on your account. Your money and your existing investments are unaffected.",
+    "no_surplus": "Your monthly spending currently uses up your income, so there is nothing left over to invest. The most useful next step is trimming regular expenses to create a small monthly surplus."
+  },
+
+  "recommendation_explanations": {
+    "emergency_fund_implicit": "Before investing for growth, it helps to keep a few months of expenses somewhere you can reach instantly. This keeps an unexpected bill from forcing you to sell investments at a bad time.",
+    "emergency_fund_goal": "This builds the safety cushion you set as a goal. Money here stays available to you at any time, with no penalty for withdrawing it.",
+    "expense_optimization": "Your monthly outgoings are close to or above your income, which leaves nothing to invest. Reducing regular spending is the step that unlocks everything else.",
+    "debt_reduction_stressed": "A large share of your income goes to loan repayments. Paying down the costliest loan first frees up money every month and usually beats the return you would get from investing the same amount.",
+    "debt_optimisation": "Clearing high-interest debt gives you a guaranteed saving equal to the interest rate. That is hard to beat with any investment of similar risk.",
+    "idle_balance_fd": "You are holding more in your savings account than you are likely to need soon. Moving part of it to a deposit earns noticeably more interest while keeping it safe.",
+    "fd_reinvest": "This deposit is maturing shortly. Renewing it keeps the money working instead of sitting idle in your account at a lower rate.",
+    "conservative_start": "A small, regular investment is a gentler way to begin than a single large one. It spreads your entry across different market levels and is easy to pause if your circumstances change.",
+    "home_purchase_sip": "A regular monthly investment suits a home purchase timeline: it builds the deposit steadily without needing a large sum up front.",
+    "home_purchase_parallel_rd": "Running a recurring deposit alongside your investments keeps part of the home fund in something predictable, so a market dip close to your purchase date does not derail the plan.",
+    "retirement_sip": "Retirement is far enough away that regular investing has time to compound. Starting smaller and staying consistent matters more than the amount.",
+    "retirement_elss": "This option also reduces your tax for the year, so part of the benefit arrives immediately rather than only at the end.",
+    "education_fd": "Education costs arrive on a known date, so a deposit that matures around then avoids the risk of having to withdraw during a market fall.",
+    "education_sip": "With several years to go, regular investing can outpace deposits while still leaving time to recover from a bad year."
+  },
+
+  "health_summary": {
+    "A": "Your finances are strong across the board.",
+    "B": "Your finances are healthy, with a little room to improve.",
+    "C": "A few areas need attention — the weakest one is the fastest to fix.",
+    "D": "Your finances are under strain. Focus on a cash cushion and reducing debt before anything else."
+  }
+}

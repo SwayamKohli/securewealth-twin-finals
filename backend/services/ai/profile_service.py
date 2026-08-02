@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 
@@ -8,6 +9,9 @@ from ai.engines.account_analyzer   import analyze_accounts
 from ai.engines.cashflow_analyzer  import analyze_cashflow
 from ai.engines.liability_analyzer import analyze_liabilities
 from ai.engines.goal_analyzer      import analyze_goals
+
+logger = logging.getLogger(__name__)
+
 
 class ProfileService:
     def __init__(self, db: Session):
@@ -22,5 +26,5 @@ class ProfileService:
             return ProfileResponse(profile=profile)
             
         except Exception as e:
-            print(f"Error in profile building: {str(e)}")
+            logger.exception("Error in profile building")
             raise

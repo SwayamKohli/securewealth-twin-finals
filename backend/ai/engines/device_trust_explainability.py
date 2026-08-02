@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 _TEMPLATES_PATH = Path(__file__).parent / "templates" / "device_templates.json"
 _OLLAMA_URL     = "http://localhost:11434/api/generate"
 _DEFAULT_MODEL  = "llama3:latest"
-_TIMEOUT_SECS   = 10
+_TIMEOUT_SECS   = 45   # cold model load can take 15-40s; see llm_source
 _MAX_LLM_OUTPUT = 600
 
 # Strict security blacklist — engineering jargon or legally complex terms
@@ -107,6 +107,7 @@ class DeviceTrustExplainer:
             "model":  self._model,
             "prompt": prompt,
             "stream": False,
+            "keep_alive": "30m",
             "options": {
                 "temperature": 0.0,  
                 "top_p": 0.9
@@ -172,15 +173,58 @@ class DeviceTrustExplainer:
         return True
 
     def _get_fallback_message(self, status: str, name: str) -> str:
+        """
+        Offline wording for each device state.
+
+        NOTE ON KEYS: this engine was written against a *_DEVICE vocabulary
+        ("TRUSTED_DEVICE", "NEW_DEVICE"), but the API sends models.enums
+        .TrustStatus values — TRUSTED / PENDING / UNTRUSTED. Nothing matched,
+        so every offline device explanation fell through to the meaningless
+        default "Account login activity update processing for {name}."
+        Both vocabularies are accepted now.
+
+        The copy is also rewritten: "access profile is fully recognized and
+        confirmed" is machine-speak. A customer wants to know whether their
+        device is trusted and what that means for them.
+        """
+        who = name.strip() if name and name.strip() else ""
+        greet = f"{who}, " if who else ""
+
         fallbacks = {
-            "TRUSTED_DEVICE": f"Welcome back, {name}. Your access profile is fully recognized and confirmed.",
-            "KNOWN_DEVICE": f"Hello {name}. Your current device is verified for account access activity.",
-            "NEW_DEVICE": f"We noticed you are logging in from a newly registered device profile, {name}.",
-            "INACTIVE_DEVICE": f"Welcome back, {name}. We are re-confirming this connection profile since it has been some time since your last visit.",
-            "SUSPICIOUS_DEVICE": "We detected an unverified device profile pattern variation during this access attempt.",
-            "ZERO_DAY_DEVICE": "This login attempt is operating via an unconfirmed or unexpected system profile configuration."
+            # Values the API actually sends.
+            "TRUSTED": (
+                f"{greet}we recognise this device, so most of your investments "
+                "will go through without extra checks."
+            ),
+            "PENDING": (
+                f"{greet}this device is still new to us. We may ask you to "
+                "confirm a few investments before we start trusting it."
+            ),
+            "UNTRUSTED": (
+                f"{greet}we do not recognise this device, so every investment "
+                "from it will need extra verification."
+            ),
+            # Legacy vocabulary, kept so older callers still get sensible text.
+            "TRUSTED_DEVICE": f"{greet}we recognise this device and your sign-in looks normal.",
+            "KNOWN_DEVICE": f"{greet}this device is known to us and verified for your account.",
+            "NEW_DEVICE": f"{greet}you are signing in from a device we have not seen before.",
+            "INACTIVE_DEVICE": (
+                f"{greet}it has been a while since you used this device, so we are "
+                "double-checking this sign-in."
+            ),
+            "SUSPICIOUS_DEVICE": (
+                "This sign-in came from a device that does not match your usual "
+                "pattern, so we are checking it more closely."
+            ),
+            "ZERO_DAY_DEVICE": (
+                "This sign-in came from a device we cannot identify, so we are "
+                "applying our strictest checks."
+            ),
         }
-        base_message = fallbacks.get(status, f"Account login activity update processing for {name}.")
+        base_message = fallbacks.get(
+            str(status).upper(),
+            f"{greet}we are checking this sign-in to keep your account safe.",
+        )
         return f"{base_message} {_MANDATORY_DISCLAIMER}"
 
     @staticmethod

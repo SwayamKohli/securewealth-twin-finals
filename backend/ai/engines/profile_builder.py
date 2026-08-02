@@ -27,6 +27,8 @@ AA Data Schema (expected input):
     "goals":                [{goal_type, target_amount, target_date, current_progress}],
   }
 """
+from typing import Any
+
 from .account_analyzer   import analyze_accounts
 from .cashflow_analyzer  import analyze_cashflow
 from .liability_analyzer import analyze_liabilities
@@ -55,6 +57,89 @@ class FinancialProfileBuilder:
     DTI_STRESSED  = 0.50
     DTI_MODERATE  = 0.35
 
+    # ── Input normalisation ────────────────────────────────────────────────
+    @staticmethod
+    def _num(value: Any, default: float = 0.0) -> float:
+        """Coerce API values (str/Decimal/None) to float."""
+        if value is None or value == "":
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _normalize(self, aa_data: dict) -> dict:
+        """
+        Accept the raw API payload the mobile app sends and reshape it:
+          * string/Decimal amounts -> float
+          * account_type "SAVINGS" -> "savings"
+          * deposit/loan types upper-cased consistently
+          * derive monthly_income / monthly_expenses from a nested
+            cashflow object when they are not supplied at the top level
+        Unknown keys are preserved untouched.
+        """
+        data = dict(aa_data or {})
+
+        data["accounts"] = [
+            {
+                **a,
+                "balance": self._num(a.get("balance")),
+                "account_type": str(a.get("account_type", "savings")).lower(),
+            }
+            for a in (data.get("accounts") or [])
+        ]
+
+        data["deposits"] = [
+            {
+                **d,
+                "principal": self._num(d.get("principal")),
+                "interest_rate": self._num(d.get("interest_rate")),
+                "deposit_type": str(d.get("deposit_type", "FD")).upper(),
+            }
+            for d in (data.get("deposits") or [])
+        ]
+
+        data["loans"] = [
+            {
+                **l,
+                "outstanding_amount": self._num(l.get("outstanding_amount")),
+                "emi": self._num(l.get("emi")),
+                "interest_rate": self._num(l.get("interest_rate")),
+                "loan_type": str(l.get("loan_type", "other")).lower(),
+            }
+            for l in (data.get("loans") or [])
+        ]
+
+        # Cash flow may arrive nested (aggregation CashflowResponse) or flat.
+        cashflow = data.get("cashflow") or {}
+        if "monthly_income" not in data:
+            data["monthly_income"] = self._num(
+                cashflow.get("total_income", cashflow.get("monthly_income"))
+            )
+        else:
+            data["monthly_income"] = self._num(data["monthly_income"])
+
+        if "monthly_expenses" not in data:
+            data["monthly_expenses"] = self._num(
+                cashflow.get("total_expenses", cashflow.get("monthly_expenses"))
+            )
+        else:
+            data["monthly_expenses"] = self._num(data["monthly_expenses"])
+
+        # Derive a 50/30/20-style split when the caller didn't provide one, so
+        # expense-aware advice still works from aggregated data alone.
+        if not data.get("spending_breakdown"):
+            expenses = data["monthly_expenses"]
+            income = data["monthly_income"]
+            data["spending_breakdown"] = {
+                "needs": round(expenses * 0.65, 2),
+                "wants": round(expenses * 0.35, 2),
+                "savings": round(max(income - expenses, 0.0), 2),
+            }
+
+        data["goals"] = data.get("goals") or []
+        return data
+
     def build_profile(self, aa_data: dict) -> dict:
         """
         Main entry point. Orchestrates the three sub-analyzers and computes
@@ -62,6 +147,11 @@ class FinancialProfileBuilder:
 
         Returns a flat dict (no nesting beyond breakdowns).
         """
+        # Normalise whatever the caller sent (API JSON uses string decimals and
+        # UPPERCASE enums) into the plain numeric/lowercase shape the analyzers
+        # expect. Without this, string balances raise TypeError downstream.
+        aa_data = self._normalize(aa_data)
+
         # ── Aggregation results ──────────────────────────────────────────────────
         asset_info    = analyze_accounts(aa_data)
         cashflow_info = analyze_cashflow(aa_data)
@@ -108,7 +198,7 @@ class FinancialProfileBuilder:
         # ── Assemble full profile ──────────────────────────────────────────────
         profile = {
             # Identity
-            "user_id":              aa_data["user_id"],
+            "user_id":              aa_data.get("user_id", "customer"),
             "name":                 aa_data.get("name", ""),
             "age":                  aa_data.get("age", 30),
             "risk_profile":         aa_data.get("risk_profile", "moderate"),

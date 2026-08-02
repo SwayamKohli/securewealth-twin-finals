@@ -4,6 +4,7 @@ import re
 import requests
 from typing import Any, Dict
 from dataclasses import asdict
+from ai.engines import llm_source
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,27 @@ def generate_unknown_risk_explanation(decision_output: Any, ollama_url: str = "h
     else:
         decision_dict = dict(decision_output)
 
-    severity = decision_dict.get("severity", "LOW")
-    decision = decision_dict.get("decision", "WARN")
-    reason_code = decision_dict.get("reason_code", "")
+    # A DecisionRecord carries these under `unknown_risk_*` names, while the
+    # zero-day engine emits them unprefixed. Accept both, or the severity and
+    # decision fall back to LOW/WARN and the customer is told a held payment
+    # "processed smoothly".
+    def _pick(*keys: str, default: str = "") -> str:
+        for key in keys:
+            value = decision_dict.get(key)
+            if value not in (None, ""):
+                return value
+        return default
+
+    severity = _pick("severity", "unknown_risk_severity", default="LOW")
+    decision = _pick("decision", "unknown_risk_decision", default="WARN")
+    reason_code = _pick("reason_code", "unknown_risk_reason_code")
+
+    # Reason codes are shaped like UNKNOWN_RISK_HIGH — the trailing token is the
+    # severity, and it is more reliable than an absent severity field.
+    if reason_code and severity == "LOW":
+        tail = str(reason_code).rsplit("_", 1)[-1].upper()
+        if tail in ("LOW", "MEDIUM", "HIGH", "CRITICAL"):
+            severity = tail
     
     # Extract structural flags from the internal audit map layer if present
     audit_entry = decision_dict.get("audit_entry", {})
@@ -74,16 +93,17 @@ def generate_unknown_risk_explanation(decision_output: Any, ollama_url: str = "h
                 "model": "llama3:latest",
                 "prompt": prompt,
                 "stream": False,
+                "keep_alive": llm_source.KEEP_ALIVE,
                 "options": {
                     "temperature": 0.0,  # Max stability
                     "top_p": 0.9
                 }
             },
-            timeout=8
+            timeout=llm_source.GENERATE_TIMEOUT
         )
         
         if response.status_code == 200:
-            raw_text = response.json().get("response", "").strip()
+            raw_text = llm_source.tidy(response.json().get("response", ""))
             
             # Post-generation regex cleanups
             clean_text = re.sub(
@@ -91,7 +111,16 @@ def generate_unknown_risk_explanation(decision_output: Any, ollama_url: str = "h
                 "", raw_text, flags=re.IGNORECASE
             ).strip()
             
-            if clean_text and _is_valid_text(clean_text):
+            # Reuse the decision-consistency guardrail: an explanation must
+            # never claim a held or blocked payment succeeded.
+            from ai.engines.decision_explanability import _contradicts_decision
+
+            if (
+                clean_text
+                and _is_valid_text(clean_text)
+                and not _contradicts_decision(clean_text, decision)
+            ):
+                llm_source.mark(llm_source.LLM)
                 if _DEFAULT_COMPLIANCE_TEXT.lower() not in clean_text.lower():
                     clean_text = clean_text.rstrip(".") + f". {_DEFAULT_COMPLIANCE_TEXT}"
                 return clean_text
@@ -106,6 +135,7 @@ def generate_unknown_risk_explanation(decision_output: Any, ollama_url: str = "h
         "BLOCK": "For your protection, this transaction was paused because it did not match your normal account signature."
     }
     base_msg = fallback_maps.get(decision, "Transaction safety screening complete.")
+    llm_source.mark(llm_source.FALLBACK)
     return f"{base_msg} {_DEFAULT_COMPLIANCE_TEXT}"
 
 

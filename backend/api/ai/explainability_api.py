@@ -23,10 +23,12 @@ from schemas.explainability_schema import (
 from ai.engines.phishing_explanability import get_phishing_explanation
 from ai.engines.decision_explanability import generate_customer_explanation
 from ai.engines.challenge_explanability import generate_challenge_instruction
+from ai.engines.i18n_catalog import narrative
 from ai.engines.device_trust_explainability import DeviceTrustExplainer
 from ai.engines.fraud_explanability import generate_risk_breakdown
 from ai.engines.unknown_risk_explanability import generate_unknown_risk_explanation
 from ai.engines.wealth_explainability import RecommendationExplainer
+from ai.engines import llm_source
 
 router = APIRouter(prefix="/api/v1/ai/explainability", tags=["Explainability"])
 
@@ -38,7 +40,43 @@ def explain_phishing_detection(
 ):
     """Generate explanation for phishing detection results."""
     try:
-        explanation = get_phishing_explanation(request.scan_result)
+        # get_phishing_explanation() reads ATTRIBUTES off a ScanResult object,
+        # but the API receives a plain dict. Wrap it so both work.
+        from types import SimpleNamespace
+
+        raw = request.scan_result
+        scan_obj = SimpleNamespace(
+            phishing_score=float(raw.get("phishing_score", 0.0) or 0.0),
+            risk_level=str(raw.get("risk_level", "SAFE")),
+            fired_signals=raw.get("fired_signals", []),
+            detected_keywords=raw.get("detected_keywords", {}),
+            signal_groups_fired=raw.get("signal_groups_fired", []),
+            negative_signals_found=raw.get("negative_signals_found", []),
+            signal_count=int(raw.get("signal_count", 0) or 0),
+            top_signal=raw.get("top_signal"),
+            message=raw.get("message", ""),
+            scanned_at=raw.get("scanned_at", ""),
+        )
+        explanation = get_phishing_explanation(scan_obj)
+        # Multilingual output (task 5.5): template catalog for hi/pa
+        if request.language in ("hi", "pa"):
+            top = str(
+                request.scan_result.get("top_signal")
+                or (request.scan_result.get("signal_groups_fired") or [""])[0]
+                or ""
+            ).upper()
+            key_map = {
+                "LINK": "SUSPICIOUS_LINK", "URL": "SUSPICIOUS_LINK",
+                "SENDER": "UNKNOWN_SENDER", "DOMAIN": "FAKE_DOMAIN",
+                "URGEN": "URGENT_LANGUAGE", "OTP": "OTP_SCAM",
+            }
+            key = "SAFE"
+            risk = str(request.scan_result.get("risk_level", "")).upper()
+            if risk not in ("", "SAFE", "LOW"):
+                key = next((v for frag, v in key_map.items() if frag in top), "URGENT_LANGUAGE")
+            localized = narrative("phishing", key, request.language)
+            if localized:
+                explanation = {**explanation, "explanation": localized, "source": "TEMPLATE_" + request.language.upper()}
         return PhishingExplanationResponse(**explanation)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -52,13 +90,24 @@ def explain_challenge_requirement(
 ):
     """Generate explanation for challenge requirements."""
     try:
+        # Multilingual output (task 5.5)
+        if request.language in ("hi", "pa"):
+            ctype = str(request.requirement.get("challenge_type", "")).upper()
+            localized = narrative("challenge", ctype, request.language)
+            if localized:
+                return ChallengeExplanationResponse(
+                    explanation=localized,
+                    source="template_" + request.language,
+                )
         explanation = generate_challenge_instruction(
             request.requirement, 
             request.ollama_url or "http://localhost:11434"
         )
+        # Report what ACTUALLY produced the text. The previous version keyed
+        # off request.ollama_url, so a default-URL request that the local model
+        # answered was still reported as "template".
         return ChallengeExplanationResponse(
-            explanation=explanation,
-            source="llm" if request.ollama_url else "template"
+            explanation=explanation, source=llm_source.take()
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -72,11 +121,20 @@ def explain_decision(
 ):
     """Generate explanation for transaction decisions."""
     try:
+        # Multilingual output (task 5.5)
+        if request.language in ("hi", "pa"):
+            decision = str(request.record.get("decision", "")).upper()
+            localized = narrative("decision", decision, request.language)
+            if localized:
+                # Curated translation, not model output — label it honestly.
+                return DecisionExplanationResponse(explanation=localized, source="catalog")
         explanation = generate_customer_explanation(
             request.record,
             request.ollama_url or "http://localhost:11434"
         )
-        return DecisionExplanationResponse(explanation=explanation)
+        return DecisionExplanationResponse(
+            explanation=explanation, source=llm_source.take()
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -108,7 +166,9 @@ def explain_risk_breakdown(
             request.output,
             request.ollama_url or "http://localhost:11434"
         )
-        return RiskExplanationResponse(explanation=explanation)
+        return RiskExplanationResponse(
+            explanation=explanation, source=llm_source.take()
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -125,7 +185,9 @@ def explain_unknown_risk(
             request.decision_output,
             request.ollama_url or "http://localhost:11434"
         )
-        return UnknownRiskExplanationResponse(explanation=explanation)
+        return UnknownRiskExplanationResponse(
+            explanation=explanation, source=llm_source.take()
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

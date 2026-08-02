@@ -3,6 +3,7 @@ import logging
 import re
 import requests
 from typing import Dict, Any
+from ai.engines import llm_source
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +35,32 @@ def generate_customer_explanation(record: Any, ollama_url: str = "http://localho
     using strict programmatic inputs from decision, reason_code, security_signals, and challenge_type.
     """
     # ── 1. Secure Attribute Extraction & Conversion ──
-    decision = getattr(record, "decision", "ALLOW")
-    reason_code = _humanize_string(getattr(record, "reason_code", "NORMAL_ACCESS"))
-    challenge_type = _humanize_string(getattr(record, "challenge_type", "None"))
+    #
+    # This engine was written against a DecisionRecord OBJECT, but the API hands
+    # it a plain dict parsed from JSON — and getattr() does not read dict keys.
+    # Every field therefore fell through to its default, so a CHALLENGE was
+    # explained to the customer as an ALLOW ("your access has been successfully
+    # granted"). Normalise first, then read.
+    def _read(key: str, default: str) -> str:
+        if isinstance(record, dict):
+            value = record.get(key, default)
+        else:
+            value = getattr(record, key, default)
+        return default if value in (None, "") else value
+
+    decision = str(_read("decision", "ALLOW")).upper()
+    reason_code = _humanize_string(_read("reason_code", "NORMAL_ACCESS"))
+    challenge_type = _humanize_string(_read("challenge_type", "None"))
     
     # Clean up security signals arrays into natural text variations before the LLM sees them
     raw_signals = []
-    if hasattr(record, "security_signals") and isinstance(record.security_signals, dict):
-        raw_signals = record.security_signals.get("active_behavior", [])
+    _signals = (
+        record.get("security_signals")
+        if isinstance(record, dict)
+        else getattr(record, "security_signals", None)
+    )
+    if isinstance(_signals, dict):
+        raw_signals = _signals.get("active_behavior", [])
     
     cleaned_signals = [_humanize_string(s) for s in raw_signals if s]
     signals_str = ", ".join(cleaned_signals) if cleaned_signals else "none"
@@ -76,16 +95,17 @@ def generate_customer_explanation(record: Any, ollama_url: str = "http://localho
                 "model": "llama3:latest",
                 "prompt": prompt,
                 "stream": False,
+                "keep_alive": llm_source.KEEP_ALIVE,
                 "options": {
                     "temperature": 0.0,  
                     "top_p": 0.9
                 }
             },
-            timeout=8
+            timeout=llm_source.GENERATE_TIMEOUT
         )
         
         if response.status_code == 200:
-            raw_text = response.json().get("response", "").strip()
+            raw_text = llm_source.tidy(response.json().get("response", ""))
             
             # HARDENED REGEX INTERCEPT: Strip conversational introductions completely
             clean_text = re.sub(
@@ -94,7 +114,12 @@ def generate_customer_explanation(record: Any, ollama_url: str = "http://localho
             ).strip()
             
             # Perform Guardrail checks on the string content
-            if clean_text and _is_valid_narrative(clean_text):
+            if (
+                clean_text
+                and _is_valid_narrative(clean_text)
+                and not _contradicts_decision(clean_text, decision)
+            ):
+                llm_source.mark(llm_source.LLM)
                 if _DEFAULT_COMPLIANCE_TEXT.lower() not in clean_text.lower():
                     clean_text = clean_text.rstrip(".") + f". {_DEFAULT_COMPLIANCE_TEXT}"
                 return clean_text
@@ -111,7 +136,51 @@ def generate_customer_explanation(record: Any, ollama_url: str = "http://localho
     }
     
     base_fallback = fallback_maps.get(decision, "We are verifying this transaction sequence for account protection safety.")
+    llm_source.mark(llm_source.FALLBACK)
     return f"{base_fallback} {_DEFAULT_COMPLIANCE_TEXT}"
+
+
+# ── Decision-consistency guardrail ───────────────────────────────────────────
+# The jargon filter above catches HOW the model writes. This catches WHAT it
+# says — specifically, an explanation that contradicts the decision it is
+# supposed to be explaining.
+#
+# Observed in testing: for a CHALLENGE the model produced "Your account access
+# has been successfully granted... as usual", and for an unknown-risk CHALLENGE
+# it produced "the payment processed smoothly without any issues". Both are the
+# opposite of the truth — the money is on hold pending verification. Shipping
+# that to a customer is worse than shipping a plain template, because it tells
+# them to stop paying attention at the exact moment they should not.
+#
+# Rule: when the decision withholds or pauses money, the narrative must not
+# claim completion or success.
+_COMPLETION_CLAIMS = (
+    "successfully granted",
+    "successfully completed",
+    "successfully processed",
+    "processed smoothly",
+    "processed successfully",
+    "went through",
+    "has been completed",
+    "was completed",
+    "no issues",
+    "without any issues",
+    "as usual",
+    "nothing to worry",
+    "no action is needed",
+    "no action needed",
+)
+
+# Decisions where money has NOT moved / is not final.
+_WITHHOLDING_DECISIONS = frozenset({"CHALLENGE", "BLOCK"})
+
+
+def _contradicts_decision(text: str, decision: str) -> bool:
+    """True when the narrative claims success for a paused or blocked action."""
+    if str(decision).upper() not in _WITHHOLDING_DECISIONS:
+        return False
+    low = text.lower()
+    return any(claim in low for claim in _COMPLETION_CLAIMS)
 
 
 def _is_valid_narrative(text: str) -> bool:

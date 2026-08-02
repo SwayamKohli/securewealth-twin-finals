@@ -1,9 +1,13 @@
+import logging
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 
 from models.user import User
 from schemas.phishing.phishing_schema import PhishingScanRequest, PhishingScanResponse
 from ai.engines.phishing_engine import scan_message
+
+
+logger = logging.getLogger(__name__)
 
 
 class PhishingService:
@@ -33,5 +37,5 @@ class PhishingService:
             )
             
         except Exception as e:
-            print(f"Error in phishing scanning: {str(e)}")
+            logger.exception("Error in phishing scanning")
             raise

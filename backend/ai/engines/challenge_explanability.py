@@ -4,6 +4,7 @@ import re
 import requests
 from typing import Any, Dict
 from dataclasses import asdict
+from ai.engines import llm_source
 
 logger = logging.getLogger(__name__)
 
@@ -79,16 +80,17 @@ def generate_challenge_instruction(requirement: Any, ollama_url: str = "http://l
                 "model": "llama3:latest",
                 "prompt": prompt,
                 "stream": False,
+                "keep_alive": llm_source.KEEP_ALIVE,
                 "options": {
                     "temperature": 0.0,  # Forces maximum repeatability
                     "top_p": 0.9
                 }
             },
-            timeout=8
+            timeout=llm_source.GENERATE_TIMEOUT
         )
         
         if response.status_code == 200:
-            raw_text = response.json().get("response", "").strip()
+            raw_text = llm_source.tidy(response.json().get("response", ""))
             
             # Scrub out potential conversational meta-introductions
             clean_text = re.sub(
@@ -97,6 +99,7 @@ def generate_challenge_instruction(requirement: Any, ollama_url: str = "http://l
             ).strip()
             
             if clean_text and _is_valid_instruction(clean_text):
+                llm_source.mark(llm_source.LLM)
                 if _DEFAULT_COMPLIANCE_TEXT.lower() not in clean_text.lower():
                     clean_text = clean_text.rstrip(".") + f". {_DEFAULT_COMPLIANCE_TEXT}"
                 return clean_text
@@ -113,6 +116,7 @@ def generate_challenge_instruction(requirement: Any, ollama_url: str = "http://l
     }
     
     base_msg = fallback_maps.get(challenge_type, "To preserve account protection integrity, an access validation checkpoint is processing. Please finalize the identity verification step to proceed.")
+    llm_source.mark(llm_source.FALLBACK)
     return f"{base_msg} {_DEFAULT_COMPLIANCE_TEXT}"
 
 
