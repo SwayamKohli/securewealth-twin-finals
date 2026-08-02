@@ -9,6 +9,7 @@ from core.dependencies import (get_current_user,get_db)
 from models.user import User
 from schemas.aggregation_schema import (
     AggregatedAccountResponse,
+    ConsentResponse,
     AggregationStatusResponse,
     CashflowResponse,
     LinkAccountRequest,
@@ -24,13 +25,92 @@ router = APIRouter(
 )
 
 
+# ── Task 2.1: Consent-based Account Aggregation ──────────────────────────────
+# Flow: User -> Consent -> Account Aggregator -> Linked Banks -> Dashboard.
+# Aggregated data endpoints require explicit, revocable consent.
+
+def require_aa_consent(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    if not getattr(current_user, "aa_consent", False):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Account Aggregation consent required. "
+                "Grant consent via POST /api/v1/aggregation/consent to view "
+                "your unified wealth dashboard."
+            ),
+        )
+    return current_user
+
+
+@router.post(
+    "/consent",
+    response_model=ConsentResponse,
+    status_code=status.HTTP_200_OK,
+)
+def grant_consent(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Record the customer's explicit consent for account aggregation."""
+    from datetime import datetime, timezone
+
+    current_user.aa_consent = True
+    current_user.aa_consent_at = datetime.now(timezone.utc)
+    db.commit()
+    return ConsentResponse(
+        aa_consent=True,
+        aa_consent_at=current_user.aa_consent_at,
+        message="Consent granted. Your accounts can now be aggregated securely.",
+    )
+
+
+@router.delete(
+    "/consent",
+    response_model=ConsentResponse,
+    status_code=status.HTTP_200_OK,
+)
+def revoke_consent(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Revoke aggregation consent. Aggregated views stop immediately."""
+    current_user.aa_consent = False
+    current_user.aa_consent_at = None
+    db.commit()
+    return ConsentResponse(
+        aa_consent=False,
+        aa_consent_at=None,
+        message="Consent revoked. Aggregated data is no longer accessible.",
+    )
+
+
+@router.get(
+    "/consent",
+    response_model=ConsentResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_consent(
+    current_user: User = Depends(get_current_user),
+):
+    granted = bool(getattr(current_user, "aa_consent", False))
+    return ConsentResponse(
+        aa_consent=granted,
+        aa_consent_at=current_user.aa_consent_at,
+        message="Consent granted." if granted else "Consent not granted.",
+    )
+
+
 @router.get(
     "/accounts",
     response_model=list[AggregatedAccountResponse],
     status_code=status.HTTP_200_OK,
 )
 def get_accounts(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_aa_consent),
     db: Session = Depends(get_db),
 ):
     service = AggregationService(db)
@@ -47,7 +127,7 @@ def get_accounts(
 )
 def get_account(
     account_id: UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_aa_consent),
     db: Session = Depends(get_db),
 ):
     service = AggregationService(db)
@@ -64,7 +144,7 @@ def get_account(
 )
 def link_account(
     request: LinkAccountRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_aa_consent),
     db: Session = Depends(get_db),
 ):
     service = AggregationService(db)
@@ -99,7 +179,7 @@ def remove_account(
 )
 def sync_aggregation(
     request: SyncRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_aa_consent),
     db: Session = Depends(get_db),
 ):
     service = AggregationService(db)
@@ -131,7 +211,7 @@ def get_status(
     status_code=status.HTTP_200_OK,
 )
 def get_net_worth(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_aa_consent),
     db: Session = Depends(get_db),
 ):
     service = AggregationService(db)
@@ -147,7 +227,7 @@ def get_net_worth(
     status_code=status.HTTP_200_OK,
 )
 def get_cashflow(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_aa_consent),
     db: Session = Depends(get_db),
 ):
     service = AggregationService(db)

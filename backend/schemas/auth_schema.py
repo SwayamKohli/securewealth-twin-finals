@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 # --------------------------------------------------
@@ -32,10 +32,18 @@ class RegisterRequest(BaseModel):
 # --------------------------------------------------
 
 class LoginRequest(BaseModel):
+    """
+    Bank-grade login (task 2.2). `login_id` is the customer's SecureWealth ID
+    (CIF-style, e.g. SW1A2B3C4D). The accepted identifier types are
+    configurable via LOGIN_METHODS (CUSTOMER_ID and/or PHONE); phone login is
+    disabled by default on evaluator guidance.
+    """
 
-    phone: str = Field(
-        min_length=10,
-        max_length=15,
+    login_id: str = Field(
+        min_length=6,
+        max_length=20,
+        validation_alias=AliasChoices("login_id", "customer_id", "phone"),
+        description="SecureWealth ID / CIF (e.g. SW1A2B3C4D).",
     )
 
     mpin: str = Field(
@@ -65,6 +73,8 @@ class SessionResponse(BaseModel):
 
     full_name: str
 
+    customer_id: str | None = None
+
     phone: str
 
     email: str | None
@@ -91,3 +101,7 @@ class RegisterResponse(BaseModel):
     message: str
 
     user_id: UUID
+
+    # The customer's permanent login identifier — shown ONCE at registration,
+    # exactly like a bank issuing a CIF number.
+    customer_id: str

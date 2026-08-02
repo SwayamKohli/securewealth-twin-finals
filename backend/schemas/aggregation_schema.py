@@ -83,3 +83,9 @@ class CashflowResponse(BaseModel):
     total_expenses: Decimal
     net_cashflow: Decimal
     transaction_count: int
+
+class ConsentResponse(BaseModel):
+    """Task 2.1 — Account Aggregation consent state."""
+    aa_consent: bool
+    aa_consent_at: datetime | None = None
+    message: str
