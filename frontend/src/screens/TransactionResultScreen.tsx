@@ -15,6 +15,7 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { COLORS } from '../constants/colors';
+import { useI18n } from '../i18n';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS, DECISION_STYLES } from '../constants/theme';
 import { generateReferenceId } from '../utils/riskSimulator';
 
@@ -72,6 +73,7 @@ const DetailRow = ({
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 const TransactionResultScreen = ({ route, navigation }: any) => {
+  const { t } = useI18n();
   const { transactionData, assessment } = route.params;
   const insets = useSafeAreaInsets();
 
@@ -123,7 +125,7 @@ const TransactionResultScreen = ({ route, navigation }: any) => {
       {/* Receipt card */}
       <View style={styles.card}>
         <View style={styles.cardHeaderRow}>
-          <Text style={styles.cardTitle}>Payment Details</Text>
+          <Text style={styles.cardTitle}>{t('result.paymentDetails')}</Text>
           <View style={[styles.statusBadge, { backgroundColor: decisionStyle.bgColor }]}>
             <Text style={[styles.statusBadgeText, { color: decisionStyle.color }]}>
               {isSuccess ? 'Completed' : 'Stopped'}
@@ -131,8 +133,8 @@ const TransactionResultScreen = ({ route, navigation }: any) => {
           </View>
         </View>
 
-        <DetailRow label="Reference ID" value={referenceId} emphasize />
-        <DetailRow label="Amount" value={formatCurrency(transactionData.amount)} />
+        <DetailRow label={t('result.reference')} value={referenceId} emphasize />
+        <DetailRow label={t('result.amount')} value={formatCurrency(transactionData.amount)} />
         <DetailRow
           label="To"
           value={`${transactionData.toLabel} \u00B7 ${transactionData.toDetail}`}
@@ -141,8 +143,8 @@ const TransactionResultScreen = ({ route, navigation }: any) => {
           label="From"
           value={`${transactionData.fromAccount.bankName} ${transactionData.fromAccount.masked}`}
         />
-        <DetailRow label="Payment Mode" value={transactionData.paymentMode} />
-        <DetailRow label="Date & Time" value={formatDateTime(completedAt)} />
+        <DetailRow label={t('result.mode')} value={transactionData.paymentMode} />
+        <DetailRow label={t('result.dateTime')} value={formatDateTime(completedAt)} />
         {transactionData.note ? <DetailRow label="Note" value={transactionData.note} /> : null}
       </View>
 
@@ -151,8 +153,8 @@ const TransactionResultScreen = ({ route, navigation }: any) => {
         <Feather name="shield" size={16} color={COLORS.success} />
         <Text style={styles.trustFooterText}>
           {isSuccess
-            ? 'Your money is protected. This transaction has been securely recorded for your records.'
-            : 'Your account is safe. This attempt has been securely recorded and our team has been notified.'}
+            ? 'Your money is protected. A permanent record of this has been saved to your account.'
+            : 'Your account is safe. We have saved a permanent record of this and our team has been alerted.'}
         </Text>
       </View>
 
@@ -168,7 +170,7 @@ const TransactionResultScreen = ({ route, navigation }: any) => {
           activeOpacity={0.8}
         >
           <Feather name="repeat" size={16} color={COLORS.primary} />
-          <Text style={styles.secondaryBtnText}>Send Another Payment</Text>
+          <Text style={styles.secondaryBtnText}>{t('result.another')}</Text>
         </TouchableOpacity>
       </View>
 

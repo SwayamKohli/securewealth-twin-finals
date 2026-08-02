@@ -14,23 +14,15 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-nati
 import { Feather } from '@expo/vector-icons';
 
 import { COLORS } from '../constants/colors';
+import { useI18n } from '../i18n';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 
 // General account-safety reminders (not phishing-specific — see PhishingScannerScreen
 // for message-analysis warning signs)
 const SAFETY_TIPS = [
-  {
-    icon: 'eye',
-    text: 'We watch every transaction for unusual activity, 24 hours a day.',
-  },
-  {
-    icon: 'message-circle',
-    text: "If we ever flag something, we'll always explain why in plain language.",
-  },
-  {
-    icon: 'shield',
-    text: 'Never share your MPIN, OTP, or password with anyone -- not even bank staff.',
-  },
+  { icon: 'eye', key: 'safety.tip1' },
+  { icon: 'message-circle', key: 'safety.tip2' },
+  { icon: 'shield', key: 'safety.tip3' },
 ];
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -74,6 +66,7 @@ const ActionCard = ({
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 const SafetyHubScreen = ({ navigation }: any) => {
+  const { t } = useI18n();
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       {/* Hero */}
@@ -81,11 +74,8 @@ const SafetyHubScreen = ({ navigation }: any) => {
         <View style={styles.heroIconWrap}>
           <Feather name="shield" size={32} color={COLORS.success} />
         </View>
-        <Text style={styles.heroTitle}>Stay Protected</Text>
-        <Text style={styles.heroSubtitle}>
-          We're always watching for fraud and scams -- here's how you can stay one step
-          ahead too.
-        </Text>
+        <Text style={styles.heroTitle}>{t('safety.heroTitle')}</Text>
+        <Text style={styles.heroSubtitle}>{t('safety.heroSubtitle')}</Text>
       </View>
 
       {/* Content */}
@@ -96,16 +86,16 @@ const SafetyHubScreen = ({ navigation }: any) => {
             icon="message-square"
             iconColor={COLORS.primary}
             iconBg={COLORS.primaryVeryLight}
-            title="Check a Message or Link"
-            description="Got a text, email, or WhatsApp message that feels off? Paste it here and we'll check it for warning signs."
-            onPress={() => navigation.navigate('PhishingScanner')}
+            title={t('safety.checkMsgTitle')}
+            description={t('safety.checkMsgDesc')}
+            onPress={() => navigation.navigate('PhishingTab')}
           />
           <ActionCard
             icon="activity"
             iconColor={COLORS.accentDark}
             iconBg={COLORS.accentLight}
-            title="My Security Activity"
-            description="See a plain-English history of security checks and alerts on your account."
+            title={t('activity.title')}
+            description={t('safety.activityDescNew')}
             onPress={() => navigation.navigate('MySecurityActivity')}
           />
         </View>
@@ -114,13 +104,13 @@ const SafetyHubScreen = ({ navigation }: any) => {
 
         {/* Good to know */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Good to Know</Text>
+          <Text style={styles.sectionTitle}>{t('safety.goodToKnow')}</Text>
           {SAFETY_TIPS.map((tip, i) => (
             <View key={i} style={styles.tipRow}>
               <View style={styles.tipIconWrap}>
                 <Feather name={tip.icon as any} size={16} color={COLORS.primary} />
               </View>
-              <Text style={styles.tipText}>{tip.text}</Text>
+              <Text style={styles.tipText}>{t(tip.key)}</Text>
             </View>
           ))}
         </View>

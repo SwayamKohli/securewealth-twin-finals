@@ -1,47 +1,35 @@
 // src/screens/MySecurityActivityScreen.tsx
-// SecureWealth Twin — My Security Activity (User-facing)
+// SecureWealth Twin — My Security Activity (customer-facing)
 //
-// ⚠️ BACKEND FLAG: The Master API Documentation (Finals Architecture Freeze v2)
-// has no user-facing audit/activity endpoint — only the internal decision
-// (/security/decision/make) and explainability endpoints, which return
-// single-event objects, not a listable history. There is nothing like
-// GET /audit/me or GET /users/me/activity to page through.
+// LIVE DATA: GET /api/v1/security/my-activity returns this customer's own
+// security decisions, sourced from the immutable audit chain and already
+// translated to plain language by the backend. This is NOT the admin audit
+// dashboard (that is a standalone web app) — no hashes, no signatures, no
+// other customers.
 //
-// Until that endpoint exists, this screen stays on mockData/audit_logs.json
-// unchanged. When it's added, swap the two lines below:
-//   import auditLogsData from '../../mockData/audit_logs.json';
-//   const activities = [...auditLogsData]...
-// for something like:
-//   const logs = await api.getMyActivity();   // new endpoint, TBD shape
-//   const activities = logs.map(translateLog);
-// translateLog() already expects the same auditId/timestamp/eventType/
-// eventDetails/integrityStatus shape as audit_logs.json, so a real backend
-// response with matching fields should need no further changes here.
-//
-// Shows the current user's own security events in plain English.
-// This is NOT the admin AuditDashboard — it shows user-friendly descriptions
-// of what happened to their account, not raw technical audit fields.
-//
-// Data: audit_logs.json (filtered to USR-001 for mock)
-// Each event is translated to plain English per the blueprint's
-// "Explainability Philosophy" — every action must answer in human terms.
+// M5 polish (task 13):
+//   • Grouped by day ("Today", "Yesterday", "12 Jun") instead of one flat list
+//   • Amount and fund shown as structured fields, not glued into the title
+//   • A "REPORTED" state for investments the customer stopped themselves
+//   • Fixed: the tamper badge compared against 'VERIFIED' while the value was
+//     'VALID', so every record — including healthy ones — showed a warning.
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
-import auditLogsData from '../../mockData/audit_logs.json';
-
-// ── Plain-English translation layer ──────────────────────────────────────────
-// Maps internal event types + decisions to what a regular user should see.
-// (Bank officers see raw event types in AuditDashboard — this is different.)
+import { api } from '../api/apiService';
+import { useI18n } from '../i18n';
+import { ActivitySkeleton } from '../components/common/Skeleton';
 
 type ActivityEntry = {
   id: string;
@@ -51,89 +39,67 @@ type ActivityEntry = {
   iconBg: string;
   title: string;
   detail: string;
-  integrityStatus: string;
+  amount: number | null;
+  fundName: string | null;
+  tamperProtected: boolean;
 };
 
-const translateLog = (log: typeof auditLogsData[0]): ActivityEntry => {
-  const base = {
-    id: log.auditId,
-    timestamp: log.timestamp,
-    integrityStatus: log.integrityStatus,
-  };
+interface ApiActivity {
+  id: string;
+  timestamp: string | null;
+  decision: string;
+  title: string;
+  detail: string;
+  status: string;
+  amount: number | null;
+  fund_name: string | null;
+  tamper_protected: boolean;
+}
 
-  if (log.eventType === 'BLOCK_TRANSACTION') {
-    const amount = (log.eventDetails as any).amount;
-    const recipient = (log.eventDetails as any).recipient ?? (log.eventDetails as any).merchant;
-    return {
-      ...base,
-      icon: 'shield',
-      iconColor: COLORS.danger,
-      iconBg: COLORS.dangerLight,
-      title: 'A payment was stopped for your safety',
-      detail: `We blocked a payment of \u20B9${Number(amount).toLocaleString('en-IN')} to ${recipient}. No money left your account.`,
-    };
-  }
+const DECISION_VISUALS: Record<string, { icon: string; color: string; bg: string }> = {
+  ALLOW: { icon: 'check-circle', color: COLORS.success, bg: '#DCFCE7' },
+  WARN: { icon: 'alert-triangle', color: '#F59E0B', bg: '#FEF3C7' },
+  CHALLENGE: { icon: 'shield', color: '#6366F1', bg: '#E0E7FF' },
+  BLOCK: { icon: 'x-circle', color: '#DC2626', bg: '#FEE2E2' },
+};
 
-  if (log.eventType === 'ALLOW_TRANSACTION') {
-    const amount = (log.eventDetails as any).amount;
-    const recipient = (log.eventDetails as any).recipient ?? (log.eventDetails as any).merchant;
-    return {
-      ...base,
-      icon: 'check-circle',
-      iconColor: COLORS.success,
-      iconBg: COLORS.success + '15',
-      title: 'Payment completed',
-      detail: `\u20B9${Number(amount).toLocaleString('en-IN')} sent to ${recipient}.`,
-    };
-  }
+// The customer stopping an investment themselves (task 4.3c) is recorded with
+// decision=BLOCK, but it deserves its own visual — they did this, we didn't.
+const STATUS_VISUALS: Record<string, { icon: string; color: string; bg: string }> = {
+  REPORTED: { icon: 'shield-off', color: '#DC2626', bg: '#FEE2E2' },
+};
 
-  if (log.eventType === 'ALLOW_LOGIN') {
-    const device = (log.eventDetails as any).device ?? 'your device';
-    const location = (log.eventDetails as any).location ?? '';
-    return {
-      ...base,
-      icon: 'log-in',
-      iconColor: COLORS.primary,
-      iconBg: COLORS.primaryVeryLight,
-      title: 'You logged in',
-      detail: `Login from ${device}${location ? ` in ${location}` : ''}.`,
-    };
-  }
-
-  if (log.eventType === 'TAMPER_ATTEMPT') {
-    return {
-      ...base,
-      icon: 'alert-triangle',
-      iconColor: COLORS.caution,
-      iconBg: COLORS.cautionLight,
-      title: 'Unusual activity detected and resolved',
-      detail:
-        'Our security system detected and automatically corrected an irregularity in your security records. Your account is safe.',
-    };
-  }
-
-  // Fallback for any future event types
+const translateLog = (log: ApiActivity): ActivityEntry => {
+  const v =
+    STATUS_VISUALS[String(log.status).toUpperCase()] ||
+    DECISION_VISUALS[log.decision] ||
+    DECISION_VISUALS.ALLOW;
   return {
-    ...base,
-    icon: 'info',
-    iconColor: COLORS.info,
-    iconBg: COLORS.info + '15',
-    title: log.eventType.replace(/_/g, ' '),
-    detail: `Security event recorded on your account.`,
+    id: log.id,
+    timestamp: log.timestamp || new Date().toISOString(),
+    icon: v.icon,
+    iconColor: v.color,
+    iconBg: v.bg,
+    title: log.title,
+    detail: log.detail,
+    amount: log.amount,
+    fundName: log.fund_name,
+    tamperProtected: !!log.tamper_protected,
   };
 };
 
-const formatRelativeTime = (iso: string): string => {
-  const date = new Date(iso);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffH = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffD = Math.floor(diffH / 24);
+const formatCurrency = (n: number) => '₹' + Math.round(n).toLocaleString('en-IN');
 
-  if (diffD === 0) return 'Today';
-  if (diffD === 1) return 'Yesterday';
+/** Day bucket label used for section headers. */
+const dayLabel = (iso: string, t: (k: string) => string): string => {
+  const date = new Date(iso);
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diffD = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86400000);
+
+  if (diffD === 0) return t('common.today');
+  if (diffD === 1) return t('common.yesterday');
   if (diffD < 7) return `${diffD} days ago`;
-  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 const formatTime = (iso: string): string =>
@@ -145,86 +111,154 @@ const formatTime = (iso: string): string =>
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 const MySecurityActivityScreen = () => {
+  const { t } = useI18n();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [activities, setActivities] = useState<ActivityEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Translate all logs to user-friendly entries, most recent first
-  const activities = [...auditLogsData]
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-    .map(translateLog);
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await api.getMySecurityActivity();
+      setActivities((res.activities || []).map(translateLog));
+    } catch {
+      setError(t('common.pullToRetry'));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Group into day buckets, preserving the newest-first order the API returns.
+  const groups = useMemo(() => {
+    const out: { label: string; items: ActivityEntry[] }[] = [];
+    for (const item of activities) {
+      const label = dayLabel(item.timestamp, t);
+      const last = out[out.length - 1];
+      if (last && last.label === label) last.items.push(item);
+      else out.push({ label, items: [item] });
+    }
+    return out;
+  }, [activities, t]);
+
+  if (loading) return <ActivitySkeleton />;
 
   return (
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            load();
+          }}
+          tintColor={COLORS.primary}
+        />
+      }
     >
-      {/* Reassurance banner */}
+      {/* Reassurance banner — what "protected" actually means, in one line */}
       <View style={styles.banner}>
         <Feather name="shield" size={16} color={COLORS.success} />
         <Text style={styles.bannerText}>
-          Every action on your account is recorded and protected.
+          {t('activity.banner')}
         </Text>
       </View>
 
-      {/* Activity list */}
-      {activities.map((activity) => {
-        const expanded = expandedId === activity.id;
-        return (
-          <TouchableOpacity
-            key={activity.id}
-            style={styles.activityRow}
-            onPress={() => setExpandedId(expanded ? null : activity.id)}
-            activeOpacity={0.7}
-          >
-            {/* Icon */}
-            <View style={[styles.activityIcon, { backgroundColor: activity.iconBg }]}>
-              <Feather name={activity.icon as any} size={18} color={activity.iconColor} />
-            </View>
+      {error && <Text style={styles.emptyText}>{error}</Text>}
+      {!error && activities.length === 0 && (
+        <Text style={styles.emptyText}>
+          {t('activity.empty')}
+        </Text>
+      )}
 
-            {/* Content */}
-            <View style={styles.activityContent}>
-              <View style={styles.activityTopRow}>
-                <Text style={styles.activityTitle}>{activity.title}</Text>
-                <Feather
-                  name={expanded ? 'chevron-up' : 'chevron-down'}
-                  size={15}
-                  color={COLORS.textTertiary}
-                />
-              </View>
+      {groups.map((group) => (
+        <View key={group.label}>
+          <Text style={styles.dayHeader}>{group.label}</Text>
 
-              <View style={styles.activityMetaRow}>
-                <Text style={styles.activityTime}>
-                  {formatRelativeTime(activity.timestamp)} · {formatTime(activity.timestamp)}
-                </Text>
-                {/* Integrity status — plain English */}
-                <View style={styles.integrityRow}>
-                  <Feather
-                    name={activity.integrityStatus === 'VERIFIED' ? 'check' : 'alert-triangle'}
-                    size={11}
-                    color={activity.integrityStatus === 'VERIFIED' ? COLORS.success : COLORS.caution}
-                  />
-                  <Text
-                    style={[
-                      styles.integrityText,
-                      {
-                        color:
-                          activity.integrityStatus === 'VERIFIED' ? COLORS.success : COLORS.caution,
-                      },
-                    ]}
-                  >
-                    Securely recorded
-                  </Text>
+          {group.items.map((activity) => {
+            const expanded = expandedId === activity.id;
+            return (
+              <TouchableOpacity
+                key={activity.id}
+                style={styles.activityRow}
+                onPress={() => setExpandedId(expanded ? null : activity.id)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`${activity.title}. ${
+                  expanded ? 'Collapse' : 'Expand'
+                } for details.`}
+              >
+                <View style={[styles.activityIcon, { backgroundColor: activity.iconBg }]}>
+                  <Feather name={activity.icon as any} size={18} color={activity.iconColor} />
                 </View>
-              </View>
 
-              {/* Expanded detail */}
-              {expanded && (
-                <Text style={styles.activityDetail}>{activity.detail}</Text>
-              )}
-            </View>
-          </TouchableOpacity>
-        );
-      })}
+                <View style={styles.activityContent}>
+                  <View style={styles.activityTopRow}>
+                    <Text style={styles.activityTitle}>{activity.title}</Text>
+                    <Feather
+                      name={expanded ? 'chevron-up' : 'chevron-down'}
+                      size={15}
+                      color={COLORS.textTertiary}
+                    />
+                  </View>
+
+                  {/* Amount and fund as their own line — scannable */}
+                  {(activity.amount != null || activity.fundName) && (
+                    <Text style={styles.activitySubject}>
+                      {activity.amount != null ? formatCurrency(activity.amount) : ''}
+                      {activity.amount != null && activity.fundName ? ' · ' : ''}
+                      {activity.fundName || ''}
+                    </Text>
+                  )}
+
+                  <View style={styles.activityMetaRow}>
+                    <Text style={styles.activityTime}>{formatTime(activity.timestamp)}</Text>
+                    <View style={styles.integrityRow}>
+                      <Feather
+                        name={activity.tamperProtected ? 'lock' : 'alert-triangle'}
+                        size={11}
+                        color={activity.tamperProtected ? COLORS.success : COLORS.caution}
+                      />
+                      <Text
+                        style={[
+                          styles.integrityText,
+                          {
+                            color: activity.tamperProtected ? COLORS.success : COLORS.caution,
+                          },
+                        ]}
+                      >
+                        {activity.tamperProtected
+                          ? t('activity.protected')
+                          : t('activity.rechecking')}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {expanded && (
+                    <View>
+                      <Text style={styles.activityDetail}>{activity.detail}</Text>
+                      <Text style={styles.activityFootnote}>
+                        {activity.tamperProtected
+                          ? t('activity.sealed')
+                          : t('activity.recheckNote')}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ))}
 
       <View style={{ height: SPACING.xxl }} />
     </ScrollView>
@@ -232,6 +266,18 @@ const MySecurityActivityScreen = () => {
 };
 
 const styles = StyleSheet.create({
+  centerBox: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.background,
+  },
+  emptyText: {
+    ...TYPOGRAPHY.body,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    padding: SPACING.xl,
+  },
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
@@ -241,7 +287,7 @@ const styles = StyleSheet.create({
   },
   banner: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: SPACING.sm,
     backgroundColor: COLORS.primaryVeryLight,
     borderRadius: BORDER_RADIUS.lg,
@@ -253,6 +299,14 @@ const styles = StyleSheet.create({
     color: COLORS.primaryMedium,
     flex: 1,
     lineHeight: 19,
+  },
+  dayHeader: {
+    ...TYPOGRAPHY.captionBold,
+    color: COLORS.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+    marginTop: SPACING.sm,
+    marginBottom: SPACING.sm,
   },
   activityRow: {
     flexDirection: 'row',
@@ -281,13 +335,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: SPACING.sm,
-    marginBottom: 4,
+    marginBottom: 3,
   },
   activityTitle: {
     ...TYPOGRAPHY.bodySmMedium,
     color: COLORS.text,
     fontWeight: '600',
     flex: 1,
+  },
+  activitySubject: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.text,
+    fontWeight: '700',
+    marginBottom: 4,
   },
   activityMetaRow: {
     flexDirection: 'row',
@@ -314,6 +374,12 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     marginTop: SPACING.sm,
     lineHeight: 19,
+  },
+  activityFootnote: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+    marginTop: SPACING.xs,
+    lineHeight: 16,
   },
 });
 
