@@ -74,11 +74,11 @@ const ExplainableAlert: React.FC<ExplainableAlertProps> = ({
   return (
     <Card
       variant="outlined"
-      style={[
+      style={StyleSheet.flatten([
         styles.container,
         { borderLeftColor: cfg.color, backgroundColor: cfg.bg },
         style,
-      ]}
+      ])}
       padding={0}
     >
       {/* Always-visible header row */}
