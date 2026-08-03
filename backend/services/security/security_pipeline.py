@@ -69,6 +69,22 @@ _fraud_engine_failed = False
 _zero_day_detector: Any = None
 _zero_day_failed = False
 
+# Which zero-day detector is live, and why. Exposed via /health/services so the
+# answer to "is the autoencoder actually running?" is checkable rather than a
+# claim. Same reasoning as llm_source for the explainers: a silent fallback and
+# a working model look identical from the outside.
+_zero_day_status: dict = {
+    "detector": "none",
+    "engine": "unavailable",
+    "detail": "not initialised yet",
+}
+
+
+def zero_day_status() -> dict:
+    """Snapshot of which novelty detector is in use. Safe to call anytime."""
+    get_zero_day_detector()          # force lazy init
+    return dict(_zero_day_status)
+
 
 def get_fraud_engine():
     """Return the shared FraudIntelligenceEngine, or None if unavailable."""
@@ -107,6 +123,11 @@ def get_zero_day_detector():
             from ai.engines.zero_day_detector import ZeroDayDetector
 
             _zero_day_detector = ZeroDayDetector.from_disk()
+            _zero_day_status.update(
+                detector="autoencoder",
+                engine="PyTorch autoencoder (22 features, reconstruction error)",
+                detail="ai/engines/models/autoencoder.pth",
+            )
             logger.info("SecurityPipeline: Zero-Day autoencoder loaded.")
         except Exception as exc:
             logger.info(
@@ -120,11 +141,19 @@ def get_zero_day_detector():
                 )
 
                 _zero_day_detector = StatisticalZeroDayDetector.from_disk()
+                _zero_day_status.update(
+                    detector="statistical",
+                    engine="numpy baseline-deviation detector",
+                    detail=f"autoencoder unavailable: {exc}",
+                )
                 logger.info(
                     "SecurityPipeline: statistical Zero-Day detector active."
                 )
             except Exception as exc2:
                 _zero_day_failed = True
+                _zero_day_status.update(
+                    detector="none", engine="unavailable", detail=str(exc2)
+                )
                 logger.warning(
                     "SecurityPipeline: no zero-day detector available (%s). "
                     "Continuing without novelty detection.",

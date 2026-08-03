@@ -1,0 +1,32 @@
+{
+  "p50": 0.27956986,
+  "p90": 0.41357994,
+  "p95": 0.46010068,
+  "p99": 0.59199351,
+  "input_dim": 22,
+  "feature_cols": [
+    "hour_sin",
+    "hour_cos",
+    "day_of_week",
+    "is_off_hours",
+    "in_active_window",
+    "is_new_device",
+    "otp_time_sec",
+    "otp_z_score",
+    "fast_otp_flag",
+    "slow_otp_flag",
+    "amount",
+    "amount_ratio",
+    "amount_z_score",
+    "amount_is_large",
+    "round_amount_flag",
+    "is_new_recipient",
+    "session_duration",
+    "txns_last_1h",
+    "txns_last_24h",
+    "burst_flag",
+    "new_device_and_recipient",
+    "round_and_new_recipient"
+  ],
+  "training_rows": 136500
+}
