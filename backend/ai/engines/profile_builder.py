@@ -112,16 +112,22 @@ class FinancialProfileBuilder:
 
         # Cash flow may arrive nested (aggregation CashflowResponse) or flat.
         cashflow = data.get("cashflow") or {}
+        # Prefer the explicitly monthly fields. total_income / total_expenses
+        # only mean "per month" if the caller windowed them to a month, and for
+        # a long time nothing did: the aggregation service summed the account's
+        # whole history, so every figure derived from it was several times too
+        # large. Reading monthly_* first means a caller that has done the work
+        # is believed, and the totals are only a fallback.
         if "monthly_income" not in data:
             data["monthly_income"] = self._num(
-                cashflow.get("total_income", cashflow.get("monthly_income"))
+                cashflow.get("monthly_income", cashflow.get("total_income"))
             )
         else:
             data["monthly_income"] = self._num(data["monthly_income"])
 
         if "monthly_expenses" not in data:
             data["monthly_expenses"] = self._num(
-                cashflow.get("total_expenses", cashflow.get("monthly_expenses"))
+                cashflow.get("monthly_expenses", cashflow.get("total_expenses"))
             )
         else:
             data["monthly_expenses"] = self._num(data["monthly_expenses"])

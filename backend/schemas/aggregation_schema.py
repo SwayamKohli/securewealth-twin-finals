@@ -79,10 +79,27 @@ class NetWorthResponse(BaseModel):
 
 
 class CashflowResponse(BaseModel):
+    """
+    All figures cover a rolling one-month window (see
+    AggregationService.CASHFLOW_WINDOW_DAYS), so they can be read as monthly
+    rates without dividing by anything.
+
+    The monthly_* fields say that in the name. total_income / total_expenses
+    are kept because the mobile app and the contract test already read them,
+    and over a one-month window the two are the same number.
+    """
     total_income: Decimal
     total_expenses: Decimal
     net_cashflow: Decimal
     transaction_count: int
+
+    monthly_income: Decimal = Decimal("0.00")
+    monthly_expenses: Decimal = Decimal("0.00")
+    # Money moved into mutual funds. Deliberately excluded from both income and
+    # expenses — investing is not spending, and counting SIPs as income is what
+    # made every persona's income climb during a demo.
+    monthly_invested: Decimal = Decimal("0.00")
+    period_days: int = 30
 
 class ConsentResponse(BaseModel):
     """Task 2.1 — Account Aggregation consent state."""

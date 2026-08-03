@@ -36,7 +36,15 @@ def analyze_accounts(aa_data: dict) -> dict:
     # Needs income/expenses for idle balance and salary account detection
     monthly_income = aa_data.get("monthly_income", 0.0)
     monthly_expenses = aa_data.get("monthly_expenses", 0.0)
-    emergency_buffer = monthly_expenses * 1.0  # 1 month of expenses buffer
+    # Cash is only "idle" once the emergency fund is genuinely covered.
+    #
+    # This reserved 1 month while every other part of the engine treats FOUR
+    # months as the emergency target (EMERGENCY_FUND_MONTHS in wealth_engine and
+    # profile_builder). With a 1-month buffer, a customer holding 3 months of
+    # expenses was told to lock the surplus into a fixed deposit — money they
+    # would need before the FD matured. Reserve the full target instead.
+    EMERGENCY_FUND_MONTHS = 4.0
+    emergency_buffer = monthly_expenses * EMERGENCY_FUND_MONTHS
     
 
     # Bank account balances

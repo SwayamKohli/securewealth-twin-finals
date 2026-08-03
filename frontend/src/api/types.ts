@@ -333,9 +333,14 @@ export interface NetWorthResponse {
   net_worth: number;
 }
 export interface CashflowResponse {
+  // All figures cover a rolling 30-day window, so the screens can label them
+  // "this month" truthfully. They used to be lifetime totals.
   total_income: number;
   total_expenses: number;
   net_cashflow: number;
+  /** Moved into mutual funds this month — counted as neither income nor spend. */
+  monthly_invested?: number;
+  period_days?: number;
   transaction_count: number;
 }
 

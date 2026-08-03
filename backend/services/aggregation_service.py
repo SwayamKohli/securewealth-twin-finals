@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -242,19 +242,77 @@ class AggregationService:
             traceback.print_exc()
             raise
 
+    # One month. Every figure this method returns is a MONTHLY figure, because
+    # everything downstream treats it as one: profile_builder maps
+    # total_expenses straight onto monthly_expenses, and the emergency-fund
+    # target is 4 x that number.
+    #
+    # This previously summed the customer's ENTIRE history with no window at
+    # all. The seeder writes 90 days, so every "monthly" figure was 3x real:
+    # runway came out a third of the truth and the emergency-fund target became
+    # twelve months of spending. Swayam has 5.2 months of runway and was still
+    # told to build an emergency fund, because 400,000 / (54,000 x 3) = 2.5.
+    # It also drifted upward for the whole demo, since each new investment was
+    # added to the lifetime total.
+    CASHFLOW_WINDOW_DAYS = 30
+
     def get_cashflow(
         self,
         user_id: UUID,
     ) -> CashflowResponse:
         try:
+            from schemas.transaction_schema import APPROVED_FUND_CATEGORIES
+
             transactions = self.transaction_service.get_transactions(
                 user_id=user_id,
             )
 
+            cutoff = datetime.now(timezone.utc) - timedelta(
+                days=self.CASHFLOW_WINDOW_DAYS
+            )
+
             total_income = Decimal("0.00")
             total_expenses = Decimal("0.00")
+            total_invested = Decimal("0.00")
+            counted = 0
 
             for transaction in transactions:
+                when = getattr(transaction, "transaction_time", None) or getattr(
+                    transaction, "created_at", None
+                )
+                if when is not None:
+                    if when.tzinfo is None:
+                        when = when.replace(tzinfo=timezone.utc)
+                    if when < cutoff:
+                        continue
+
+                # Only settled money moves. A blocked or pending investment has
+                # not left the account, so counting it would misstate the month.
+                status = str(getattr(transaction, "status", "") or "").upper()
+                if status and "SUCCESS" not in status:
+                    continue
+
+                counted += 1
+                # get_transactions returns TransactionResponse, where the DB's
+                # merchant_category is exposed as fund_category. Reading only
+                # the DB name gave "" for every row, so nothing was ever
+                # recognised as an investment and every SIP was counted as
+                # income — Ayush showed ₹8,26,500 of income on a ₹1,50,000
+                # salary. Accept either name so this works whether it is handed
+                # ORM rows or response models.
+                category = str(
+                    getattr(transaction, "fund_category", None)
+                    or getattr(transaction, "merchant_category", "")
+                    or ""
+                ).strip().upper()
+
+                # An investment is not income and not an expense — it is the
+                # customer moving their own money from cash into an asset.
+                # Counting SIPs as income (the old behaviour) inflated income
+                # every time anyone demoed an investment.
+                if category in APPROVED_FUND_CATEGORIES:
+                    total_invested += abs(transaction.amount)
+                    continue
 
                 if transaction.amount >= 0:
                     total_income += transaction.amount
@@ -272,7 +330,13 @@ class AggregationService:
                 total_income=total_income,
                 total_expenses=total_expenses,
                 net_cashflow=net_cashflow,
-                transaction_count=len(transactions),
+                transaction_count=counted,
+                # Named explicitly so nothing downstream has to assume the
+                # window. profile_builder prefers these over the totals.
+                monthly_income=total_income,
+                monthly_expenses=total_expenses,
+                monthly_invested=total_invested,
+                period_days=self.CASHFLOW_WINDOW_DAYS,
             )
 
         except Exception:
@@ -335,8 +399,18 @@ class AggregationService:
                     {
                         "transaction_id": str(tx.transaction_id),
                         "amount": float(tx.amount),  # Convert Decimal to float
-                        "merchant_name": str(tx.merchant_name),
-                        "merchant_category": str(tx.merchant_category),
+                        # get_transactions hands back TransactionResponse, which
+                        # exposes these as fund_*. Reading only merchant_* would
+                        # raise AttributeError. Nothing routes here today, but
+                        # the rename has already caused one silent bug.
+                        "merchant_name": str(
+                            getattr(tx, "fund_name", None)
+                            or getattr(tx, "merchant_name", "")
+                        ),
+                        "merchant_category": str(
+                            getattr(tx, "fund_category", None)
+                            or getattr(tx, "merchant_category", "")
+                        ),
                         "channel": str(tx.channel.value),
                         "transaction_time": str(tx.transaction_time),
                         "status": str(tx.status.value)
