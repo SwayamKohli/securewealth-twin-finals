@@ -14,7 +14,7 @@
 //   • Fixed: the tamper badge compared against 'VERIFIED' while the value was
 //     'VALID', so every record — including healthy ones — showed a warning.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -28,6 +28,7 @@ import { Feather } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import { api } from '../api/apiService';
+import { useFocusEffect } from '@react-navigation/native';
 import { useI18n } from '../i18n';
 import { ActivitySkeleton } from '../components/common/Skeleton';
 
@@ -134,6 +135,20 @@ const MySecurityActivityScreen = () => {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Every investment adds an entry here, so refresh on focus — otherwise the
+  // customer opens their activity right after being challenged and does not
+  // see the event they came to check.
+  const firstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      load();
+    }, [load])
+  );
 
   // Group into day buckets, preserving the newest-first order the API returns.
   const groups = useMemo(() => {

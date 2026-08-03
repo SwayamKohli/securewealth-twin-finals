@@ -35,7 +35,7 @@
 // recommendations call doesn't block Net Worth / Deposits / Loans from
 // rendering. Pull-to-refresh re-fetches everything.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -576,21 +576,36 @@ const WealthOverviewScreen = ({ navigation }: any) => {
     })();
   }, [loadAll]);
 
-  // If consent is withdrawn from Profile, re-gate as soon as the tab is focused
-  // rather than leaving stale aggregated data on screen.
+  // Refresh whenever the tab regains focus.
+  //
+  // This previously only re-checked consent, so coming back from a completed
+  // investment showed the OLD balance until the customer pulled to refresh —
+  // it looked as though the money had not moved. Skips the very first focus,
+  // because the initial load has already just run.
+  const firstFocus = useRef(true);
   useFocusEffect(
     useCallback(() => {
       let active = true;
+
       api
         .getConsent()
         .then((c) => {
           if (active) setHasConsent(c.aa_consent);
         })
         .catch(() => undefined);
+
+      if (firstFocus.current) {
+        firstFocus.current = false;
+      } else {
+        // Silent: no skeleton, no spinner. The screen already has data; it is
+        // being brought up to date, not loaded from nothing.
+        loadAll();
+      }
+
       return () => {
         active = false;
       };
-    }, [])
+    }, [loadAll])
   );
 
   // Task 4.11 — close the loop between advice and action. This only pre-fills

@@ -28,6 +28,7 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { COLORS } from '../constants/colors';
+import { useFocusEffect } from '@react-navigation/native';
 import { useI18n } from '../i18n';
 import { DashboardSkeleton } from '../components/common/Skeleton';
 import {
@@ -160,7 +161,21 @@ const getCategoryColor = (category: string): string => {
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 // Account Card — single slide in the carousel
-const AccountCard = ({ account }: { account: AccountVM }) => {
+// All three card actions were rendered without an onPress, so tapping them did
+// nothing at all — no navigation, no feedback. A control that looks pressable
+// and silently ignores the press reads as a broken app, which is the last
+// impression this screen should give.
+const AccountCard = ({
+  account,
+  onInvest,
+  onStatement,
+  onRefresh,
+}: {
+  account: AccountVM;
+  onInvest: () => void;
+  onStatement: () => void;
+  onRefresh: () => void;
+}) => {
   const { t } = useI18n();
   const [balanceVisible, setBalanceVisible] = useState(true);
 
@@ -223,17 +238,38 @@ const AccountCard = ({ account }: { account: AccountVM }) => {
 
       {/* Quick action buttons on card */}
       <View style={styles.cardActions}>
-        <TouchableOpacity style={styles.cardActionBtn}>
+        <TouchableOpacity
+          style={styles.cardActionBtn}
+          onPress={onInvest}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.invest')}
+        >
           <Feather name="trending-up" size={14} color={COLORS.textOnDark} />
           <Text style={styles.cardActionText}>{t('common.invest')}</Text>
         </TouchableOpacity>
         <View style={styles.cardActionDivider} />
-        <TouchableOpacity style={styles.cardActionBtn}>
+        {/* Statement opens the activity history — every investment with the
+            security decision that was taken on it. This app only moves money
+            into mutual funds, so that history IS the statement. */}
+        <TouchableOpacity
+          style={styles.cardActionBtn}
+          onPress={onStatement}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={t('dash.statement')}
+        >
           <Feather name="file-text" size={14} color={COLORS.textOnDark} />
           <Text style={styles.cardActionText}>{t('dash.statement')}</Text>
         </TouchableOpacity>
         <View style={styles.cardActionDivider} />
-        <TouchableOpacity style={styles.cardActionBtn}>
+        <TouchableOpacity
+          style={styles.cardActionBtn}
+          onPress={onRefresh}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.refresh')}
+        >
           <Feather name="refresh-cw" size={14} color={COLORS.textOnDark} />
           <Text style={styles.cardActionText}>{t('common.refresh')}</Text>
         </TouchableOpacity>
@@ -529,6 +565,20 @@ const DashboardScreen = ({ navigation }: any) => {
     })();
   }, [loadDashboard]);
 
+  // Balance and recent activity change as soon as an investment settles, so
+  // bring the tab up to date every time it regains focus. Silent refresh: the
+  // first focus is skipped because the initial load has just run.
+  const firstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      loadDashboard();
+    }, [loadDashboard])
+  );
+
   // Wealth-first quick actions (task 1.2: Send → Invest)
   const quickActions = [
     {
@@ -646,7 +696,17 @@ const DashboardScreen = ({ navigation }: any) => {
                 style={styles.carousel}
               >
                 {accounts.map((account) => (
-                  <AccountCard key={account.accountId} account={account} />
+                  <AccountCard
+                    key={account.accountId}
+                    account={account}
+                    onInvest={() =>
+                      navigation.navigate('WealthTab', { screen: 'TransactionInitiate' })
+                    }
+                    onStatement={() =>
+                      navigation.navigate('SafetyTab', { screen: 'MySecurityActivity' })
+                    }
+                    onRefresh={handleRefresh}
+                  />
                 ))}
               </ScrollView>
 
