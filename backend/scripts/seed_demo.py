@@ -1,4 +1,23 @@
 """
+seed_demo.py — SUPERSEDED by seed_personas.py
+=============================================
+
+Kept so existing commands and docs keep working, but prefer:
+
+    python scripts/seed_personas.py --reset-audit
+
+This script seeds ONE customer whose transaction history is investments only.
+Because get_cashflow() reads every positive amount as income, that customer ends
+up with zero monthly expenses, which makes months_of_runway fall back to 0.0 —
+permanently below the 4-month threshold. The result is that "Build Emergency
+Fund" is the only recommendation the wealth engine can ever produce, no matter
+how healthy the customer actually is.
+
+seed_personas.py fixes that by seeding a real expense side, and creates five
+customers who each land in a different branch of the engine.
+
+Original description follows.
+-----------------------------------------------------------------------------
 seed_demo.py — One-command demo environment
 ===========================================
 Creates a complete, realistic demo user from scratch:
