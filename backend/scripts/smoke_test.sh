@@ -10,7 +10,7 @@
 # investment and a large-amount escalation, complete any challenge, then check
 # the audit chain, wealth AI, multilingual explanations and phishing engine.
 #
-# Requires: curl, python3. Run `python scripts/seed_demo.py --reset-audit`
+# Requires: curl, python3. Run `python scripts/seed_personas.py --reset-audit`
 # first so the demo customer and fraud baseline exist.
 # ============================================================================
 set -uo pipefail
@@ -54,7 +54,7 @@ if [ "$(code "$R1")" = "200" ]; then
   TOKEN=$(body "$R1" | jget "['access_token']")
   ok "Login with SecureWealth ID $LOGIN_ID"
 else
-  bad "Login failed ($(code "$R1")) — run: python scripts/seed_demo.py --reset-audit"
+  bad "Login failed ($(code "$R1")) — run: python scripts/seed_personas.py --reset-audit"
   echo "$(body "$R1")"; exit 1
 fi
 
@@ -92,7 +92,7 @@ else bad "No Savings account found — seed the demo user first"; exit 1; fi
 BALINT=$(python3 -c "print(int(float('${BAL0:-0}')))" 2>/dev/null || echo 0)
 if [ "${BALINT:-0}" -lt 120000 ]; then
   echo "${Y}  ! Balance is low (₹$BALINT). Each run spends it; escalation tests need"
-  echo "    headroom. Re-seed with: python scripts/seed_demo.py --reset-audit${N}"
+  echo "    headroom. Re-seed with: python scripts/seed_personas.py --reset-audit${N}"
 fi
 
 # ── 4. Investment-only validation ──────────────────────────────────────────
@@ -211,7 +211,7 @@ BIG=$(python3 -c "print(min(95000, max(0, int($BALNOW * 0.6))))" 2>/dev/null)
 
 if [ "${BIG:-0}" -lt 40000 ]; then
   echo "${Y}  – skipped: demo balance is only ₹${BALNOW:-0}, too low to trigger an"
-  echo "    escalation. Re-seed to restore it:  python scripts/seed_demo.py --reset-audit${N}"
+  echo "    escalation. Re-seed to restore it:  python scripts/seed_personas.py --reset-audit${N}"
   D3=""
 else
 R9B=$(call POST /api/v1/transactions/initiate \
@@ -272,6 +272,26 @@ print(m[0]['method'] if m else '')" 2>/dev/null)
 elif [ -n "${D3:-}" ]; then
   bad "Second large investment decided ${D3} — expected CHALLENGE, so method"
   echo "      switching and cancellation went untested."
+fi
+
+# ── 7c. Which AI models are actually loaded ────────────────────────────────
+head_ "7c. AI model status"
+RAI=$(call GET /api/v1/health/ai)
+if [ "$(code "$RAI")" = "200" ]; then
+  ZD=$(body "$RAI" | jget "['zero_day']['detector']")
+  ZE=$(body "$RAI" | jget "['zero_day']['engine']")
+  EX=$(body "$RAI" | jget "['explanations']['source']")
+  case "$ZD" in
+    autoencoder) ok "Zero-day: PyTorch autoencoder loaded" ;;
+    statistical) ok "Zero-day: statistical detector (autoencoder artifacts or torch missing)"
+                 echo "${Y}      $(body "$RAI" | jget "['zero_day']['detail']")${N}" ;;
+    *)           bad "No zero-day detector active — novelty detection is OFF" ;;
+  esac
+  echo "      engine: $ZE"
+  [ "$EX" = "llm" ] && ok "Explanations: local LLM answering" \
+                    || echo "${Y}  ! Explanations: templates (start Ollama for generated text)${N}"
+else
+  bad "/health/ai unreachable ($(code "$RAI"))"
 fi
 
 # ── 8. Audit chain ─────────────────────────────────────────────────────────

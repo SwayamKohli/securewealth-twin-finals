@@ -275,6 +275,11 @@ expect "explainPhishing — threat detail sheet" \
   "$(call POST /api/v1/ai/explainability/phishing '{"scan_result":{"phishing_score":0.9,"risk_level":"HIGH","fired_signals":[],"detected_keywords":{},"signal_groups_fired":[],"negative_signals_found":[],"signal_count":1,"top_signal":"suspicious_link","message":"x","scanned_at":"2026-01-01T00:00:00Z"},"language":"en"}')" \
   "200" "explanation source"
 
+# ── 10b. AI model status (used by the admin dashboard) ─────────────────────
+head_ "10b. AI model status"
+expect "health/ai — which models are live" \
+  "$(call GET /api/v1/health/ai)" "200" "zero_day explanations summary"
+
 # ── 11. Profile actions ────────────────────────────────────────────────────
 head_ "11. Profile actions"
 expect "explainDeviceTrust — device explanation in Profile" \

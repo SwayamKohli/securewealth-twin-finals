@@ -447,7 +447,34 @@ Run with the backend on `--host 0.0.0.0` and Ollama running.
 - ☐ Turn off wifi mid-session → clear "cannot reach the server" messages, no white screen
 - ☐ No screen shows placeholder data (no "iPhone 14 Pro, Delhi", no fixed "65%")
 
-## 6.4 Timed demo rehearsal
+## 6.4 Demo personas
+
+```bash
+cd backend && python scripts/seed_personas.py --reset-audit
+```
+
+Five customers, all MPIN **123456**, each landing in a different branch of the
+wealth engine and carrying a different security baseline. Use whichever the
+question calls for instead of trying to tell every story through one login.
+
+| Login | Who | Wealth advice they get | Security demo |
+|---|---|---|---|
+| SW10000001 | Swayam Kohli | **Growth SIP** — 5.2 months runway, low debt, real surplus | ₹4,000 ALLOW · ₹95,000 CHALLENGE |
+| SW10000002 | Mahak Singh | **Build emergency fund** — holds ₹74k against a ₹2.08L target | ₹40,000 already CHALLENGEs — her baseline is ₹1–2k |
+| SW10000003 | Archit Sahay | **Pay down the 15.8% loan** — 58% of income goes to EMIs | New device, so extra verification |
+| SW10000004 | Ayush Kyumar | **Deploy idle cash + reinvest a maturing FD** — ₹12.5L sitting idle, ₹5L FD due in 45 days | ₹90,000 is normal for him and still ALLOWs |
+| SW10000005 | Vishwas Kesarwani | **Advice suppressed** — ₹62k income against ₹61k spending, so it says fix expenses first | Night-time investor; daytime is his anomaly |
+
+The last one is worth showing deliberately: the engine declines to recommend a
+product to someone who cannot afford one. That is a harder thing for a bank to
+demo than a recommendation, and it is the honest answer.
+
+☐ Log in as each and confirm the advice differs
+☐ Show Mahak and Ayush side by side — same engine, opposite conclusions
+
+---
+
+## 6.5 Timed demo rehearsal
 
 Run **twice**, timed, with a stopwatch. Before each run:
 
@@ -479,7 +506,7 @@ cd backend && python scripts/seed_demo.py --reset-audit
 
 | Item | Status | Honest answer for judges |
 |---|---|---|
-| Zero-Day autoencoder | Inactive | Engine is integrated and invoked; `autoencoder.pth` weights aren't in the repo. Drop them into `ai/engines/models/` and it activates with no code change. |
+| Zero-Day autoencoder | **Active** | PyTorch autoencoder, one-class trained on 136,500 legitimate transactions — it never saw a fraud example, so it detects novelty rather than known patterns. Thresholds are the p95/p99 of legitimate reconstruction error, not hand-picked. Verify with `GET /api/v1/health/ai` and `python scripts/zero_day_check.py`. If torch or the artifacts are missing it falls back to a numpy statistical detector, so the layer is never simply absent. |
 | Real SMS reading | Simulated inbox | iOS forbids SMS inbox access; Android needs a signed build with READ_SMS. Disclosed in-app on the Phishing tab. Consent, scanning, verdicts and explanations all run through the **real** engine — only the message list is a stand-in. |
 | OTP delivery | `demo_otp` in response | No SMS gateway in the demo; swap in a provider at one call site. |
 | Trusted devices | Working | The app registers the handset on login and Profile shows each device's trust status in plain language. Explicit primary/secondary designation is not built. |
