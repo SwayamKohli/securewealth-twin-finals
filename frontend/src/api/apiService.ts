@@ -8,7 +8,7 @@
 //   const dash = await api.getDashboard();
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { API_BASE_URL, API_HOST, REQUEST_TIMEOUT_MS } from './config';
+import { API_BASE_URL, API_HOST, REQUEST_TIMEOUT_MS, LONG_TIMEOUT_MS } from './config';
 import { getCachedToken, loadToken, saveToken, clearToken } from './authStorage';
 import type {
   RegisterRequest, RegisterResponse,
@@ -36,6 +36,9 @@ import type {
 } from './types';
 
 // ── Error type ───────────────────────────────────────────────────────────────
+/** Sentinel status for "request sent, no reply in time" (see request()). */
+export const TIMEOUT_STATUS = -1;
+
 export class ApiError extends Error {
   status: number;
   detail?: unknown;
@@ -48,8 +51,20 @@ export class ApiError extends Error {
   get isAuthError() {
     return this.status === 401 || this.status === 403;
   }
+  /** Server was never reached — safe to assume nothing happened. */
   get isNetworkError() {
     return this.status === 0;
+  }
+  /**
+   * Request was sent but no reply arrived in time. The server MAY have done
+   * the work. Never tell the customer the action failed on this.
+   */
+  get isTimeout() {
+    return this.status === TIMEOUT_STATUS;
+  }
+  /** Either failure mode, for screens that only need "no data". */
+  get isConnectivityError() {
+    return this.status === 0 || this.status === TIMEOUT_STATUS;
   }
 }
 
@@ -62,6 +77,13 @@ interface RequestOptions {
   query?: Query;
   auth?: boolean;   // attach JWT (default true)
   raw?: boolean;    // use API_HOST (no /api/v1) — for /dashboard/* endpoints
+  /**
+   * Override the default timeout. Needed for /transactions/initiate: the first
+   * one after the server starts loads the fraud model, which can push the call
+   * past 20s. Timing out there told the customer the investment failed while
+   * the backend had already completed it — the worst possible wrong answer.
+   */
+  timeoutMs?: number;
 }
 
 function buildUrl(path: string, query?: Query, raw?: boolean): string {
@@ -77,7 +99,7 @@ function buildUrl(path: string, query?: Query, raw?: boolean): string {
 }
 
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, query, auth = true, raw = false } = opts;
+  const { method = 'GET', body, query, auth = true, raw = false, timeoutMs } = opts;
 
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -89,7 +111,10 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    timeoutMs ?? REQUEST_TIMEOUT_MS
+  );
 
   let res: Response;
   try {
@@ -101,10 +126,18 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     });
   } catch (e: any) {
     clearTimeout(timeout);
-    const msg = e?.name === 'AbortError'
-      ? 'Request timed out. Check your connection and try again.'
-      : 'Cannot reach the server. Check your connection.';
-    throw new ApiError(0, msg, e);
+    // A TIMEOUT and an UNREACHABLE server are very different situations. On a
+    // timeout the server may well have completed the work, so callers that
+    // change money must not tell the customer it failed. ApiError.status
+    // distinguishes them: 0 = never reached, -1 = sent but no answer in time.
+    const aborted = e?.name === 'AbortError';
+    throw new ApiError(
+      aborted ? TIMEOUT_STATUS : 0,
+      aborted
+        ? 'The server is taking longer than usual to answer.'
+        : 'Cannot reach the server. Check your connection.',
+      e
+    );
   }
   clearTimeout(timeout);
 
@@ -193,7 +226,13 @@ export const api = {
 
   // ── Transactions ──
   initiateTransaction: (b: InitiateTransactionRequest) =>
-    request<TransactionResponse>('/api/v1/transactions/initiate', { method: 'POST', body: b }),
+    // The full security pipeline plus an audit write. Never cut this short:
+    // a timeout here is indistinguishable from a failure to the customer.
+    request<TransactionResponse>('/api/v1/transactions/initiate', {
+      method: 'POST',
+      body: b,
+      timeoutMs: LONG_TIMEOUT_MS,
+    }),
   getTransactions: (q?: GetTransactionsQuery) =>
     request<TransactionResponse[]>('/api/v1/transactions/', { query: q as Query }),
   getTransaction: (transactionId: string) =>
@@ -237,13 +276,27 @@ export const api = {
   getFinancialHealth: () =>
     request<FinancialHealthResponse>('/dashboard/health', { raw: true }),
 
+  // ── Consent (task 2.1) ──
+  getConsent: () =>
+    request<{ aa_consent: boolean; aa_consent_at: string | null; message: string }>(
+      '/api/v1/aggregation/consent'),
+  grantConsent: () =>
+    request<{ aa_consent: boolean; aa_consent_at: string | null; message: string }>(
+      '/api/v1/aggregation/consent', { method: 'POST' }),
+  revokeConsent: () =>
+    request<{ aa_consent: boolean; aa_consent_at: string | null; message: string }>(
+      '/api/v1/aggregation/consent', { method: 'DELETE' }),
+
   // ── Aggregation ──
   getAggregatedAccounts: () =>
     request<AccountResponse[]>('/api/v1/aggregation/accounts'),
   linkAccount: (b: LinkAccountRequest) =>
     request<AccountResponse>('/api/v1/aggregation/accounts/link', { method: 'POST', body: b }),
-  syncAggregation: () =>
-    request<AggregationSyncResponse>('/api/v1/aggregation/sync', { method: 'POST' }),
+  syncAggregation: (force_refresh = false) =>
+    request<AggregationSyncResponse>('/api/v1/aggregation/sync', {
+      method: 'POST',
+      body: { force_refresh },
+    }),
   getAggregationStatus: () =>
     request<AggregationStatusResponse>('/api/v1/aggregation/status'),
   getNetWorth: () =>
@@ -253,9 +306,11 @@ export const api = {
 
   // ── AI ──
   evaluateFraud: (b: FraudEvaluateRequest) =>
-    request<FraudEvaluateResponse>('/api/v1/ai/fraud/evaluate', { method: 'POST', body: b }),
+    request<FraudEvaluateResponse>('/api/v1/ai/fraud/evaluate', {
+      method: 'POST', body: b, timeoutMs: LONG_TIMEOUT_MS }),
   getWealthRecommendations: (b: WealthRecommendationsRequest) =>
-    request<WealthRecommendationsResponse>('/api/v1/ai/wealth/recommendations', { method: 'POST', body: b }),
+    request<WealthRecommendationsResponse>('/api/v1/ai/wealth/recommendations', {
+      method: 'POST', body: b, timeoutMs: LONG_TIMEOUT_MS }),
   buildProfile: (b: BuildProfileRequest) =>
     request<BuildProfileResponse>('/api/v1/ai/profile/build', { method: 'POST', body: b }),
 
@@ -265,21 +320,68 @@ export const api = {
   makeDecision: (b: DecisionMakeRequest) =>
     request<DecisionMakeResponse>('/api/v1/security/decision/make', { method: 'POST', body: b }),
 
+  /** The customer's own security history (sourced from the audit chain). */
+  getMySecurityActivity: () =>
+    request<{ count: number; activities: any[] }>('/api/v1/security/my-activity'),
+
+  // ── Challenge verification (task 4.3) ──
+  startChallenge: (transactionId: string) =>
+    request<import('./types').ChallengeStepResponse>(
+      `/api/v1/security/challenge/${transactionId}/start`,
+      { method: 'POST', timeoutMs: LONG_TIMEOUT_MS }),
+  // The final verify completes the investment end to end — the slowest call in
+  // the app. A timeout here previously stranded the customer on the OTP screen
+  // while the money had already been invested.
+  verifyChallenge: (transactionId: string, b: import('./types').ChallengeVerifyRequest) =>
+    request<import('./types').ChallengeStepResponse>(
+      `/api/v1/security/challenge/${transactionId}/verify`,
+      { method: 'POST', body: b, timeoutMs: LONG_TIMEOUT_MS }),
+
+  /** Task 4.3b — alternative verification methods for the current step. */
+  getChallengeMethods: (transactionId: string) =>
+    request<import('./types').ChallengeMethodsResponse>(
+      `/api/v1/security/challenge/${transactionId}/methods`),
+  switchChallengeMethod: (transactionId: string, method: string) =>
+    request<import('./types').ChallengeStepResponse>(
+      `/api/v1/security/challenge/${transactionId}/method`,
+      { method: 'POST', body: { method }, timeoutMs: LONG_TIMEOUT_MS }),
+  resendChallengeOtp: (transactionId: string) =>
+    request<import('./types').ChallengeStepResponse>(
+      `/api/v1/security/challenge/${transactionId}/resend-otp`, { method: 'POST' }),
+  /** Task 4.3c — "this wasn't me": drops the held investment and reports it. */
+  cancelChallenge: (transactionId: string, reason?: string) =>
+    request<import('./types').ChallengeCancelResponse>(
+      `/api/v1/security/challenge/${transactionId}/cancel`,
+      { method: 'POST', body: { reason }, timeoutMs: LONG_TIMEOUT_MS }),
+
   // ── Phishing ──
   scanPhishing: (b: PhishingScanRequest) =>
     request<PhishingScanResponse>('/api/v1/phishing/scan', { method: 'POST', body: b }),
   bulkScanPhishing: (b: BulkPhishingScanRequest) =>
-    request<PhishingScanResponse[]>('/api/v1/phishing/bulk-scan', { method: 'POST', body: b }),
+    // Backend expects a bare array of {message, context} objects.
+    request<PhishingScanResponse[]>('/api/v1/phishing/bulk-scan', {
+      method: 'POST',
+      body: b.messages,
+    }),
 
   // ── Explainability ──
   explainPhishing: (b: ExplainPhishingRequest) =>
-    request<ExplainPhishingResponse>('/api/v1/ai/explainability/phishing', { method: 'POST', body: b }),
+    request<ExplainPhishingResponse>('/api/v1/ai/explainability/phishing', { method: 'POST', body: b , timeoutMs: LONG_TIMEOUT_MS }),
+  /** Task 4.4 — plain-language device trust status for the Profile screen. */
+  explainDeviceTrust: (b: import('./types').ExplainDeviceTrustRequest) =>
+    request<import('./types').ExplainDeviceTrustResponse>(
+      '/api/v1/ai/explainability/device-trust', { method: 'POST', body: b , timeoutMs: LONG_TIMEOUT_MS }),
+  /** Task 4.3 — why this verification step is being asked for. */
+  explainChallenge: (b: import('./types').ExplainChallengeRequest) =>
+    request<import('./types').ExplainChallengeResponse>(
+      '/api/v1/ai/explainability/challenge', { method: 'POST', body: b , timeoutMs: LONG_TIMEOUT_MS }),
   explainDecision: (b: ExplainDecisionRequest) =>
-    request<ExplainDecisionResponse>('/api/v1/ai/explainability/decision', { method: 'POST', body: b }),
+    request<ExplainDecisionResponse>('/api/v1/ai/explainability/decision', { method: 'POST', body: b , timeoutMs: LONG_TIMEOUT_MS }),
   explainRisk: (b: ExplainRiskRequest) =>
-    request<{ explanation: string }>('/api/v1/ai/explainability/risk', { method: 'POST', body: b }),
+    request<{ explanation: string }>('/api/v1/ai/explainability/risk', { method: 'POST', body: b , timeoutMs: LONG_TIMEOUT_MS }),
   explainWealth: (b: ExplainWealthRequest) =>
-    request<Record<string, unknown>>('/api/v1/ai/explainability/wealth', { method: 'POST', body: b }),
+    request<import('./types').ExplainWealthResponse>(
+      '/api/v1/ai/explainability/wealth', { method: 'POST', body: b , timeoutMs: LONG_TIMEOUT_MS }),
 
   // ── Health ──
   health: () =>

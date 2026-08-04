@@ -36,16 +36,14 @@ import {
   DECISION_STYLES,
   ZERO_DAY_STYLES,
 } from '../constants/theme';
+// UI COPY ONLY — friendly names + plain-English explanations for signal IDs.
+// All risk values, decisions and scores come from the backend.
+// Display copy ONLY — friendly name, icon and severity for each signal the
+// risk engine can raise. The list of signals that actually fired always comes
+// from the backend (`triggered_signals`); this file never decides anything.
 import riskSignalsData from '../../mockData/risk_signals.json';
 import { api, ApiError } from '../api/apiService';
-import {
-  synthesizeProfile,
-  buildFraudRequest,
-  buildRiskRequest,
-  buildDecisionRequest,
-  signalIdsFor,
-  type SynthInput,
-} from '../utils/riskBuilder';
+import { useI18n } from '../i18n';
 
 // ── Local decision types (previously from riskSimulator) ──────────────────────
 type Decision = 'ALLOW' | 'WARN' | 'CHALLENGE' | 'BLOCK';
@@ -56,8 +54,10 @@ interface RiskAssessment {
   riskScore: number;
   zeroDayClass: ZeroDayClass;
   signalIds: string[];
-  // NEW: identifiers carried forward so TransactionResult can show the real txn.
+  // Identifiers carried forward so TransactionResult can show the real txn.
   transactionId?: string | null;
+  // Plain-language reason from the backend Decision Engine.
+  report?: string | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,12 +77,35 @@ const signalDefs = riskSignalsData.signalDefinitions as Record<
   { friendlyName: string; explanation: string; icon: string; severity: string }
 >;
 
+// The engine names rules in snake_case ("amount_spike"); the display copy is
+// keyed UPPER_SNAKE ("AMOUNT_SPIKE"). Normalise, and map the few names that
+// differ between the two.
+const SIGNAL_ALIASES: Record<string, string> = {
+  ROUND_NUMBER_ANOMALY: 'ROUND_NUMBER',
+  EXTREME_AMOUNT_SPIKE: 'AMOUNT_SPIKE',
+  VELOCITY_BURST: 'TRANSACTION_BURST',
+  OTP_DISTRESS: 'FAST_OTP',
+  OTP_RELAY: 'FAST_OTP',
+};
+
+const normalizeSignal = (raw: string): string => {
+  const upper = String(raw || '').toUpperCase();
+  return SIGNAL_ALIASES[upper] || upper;
+};
+
 // Cycling messages shown during the "checking" phase
-const CHECK_STEPS = [
-  'Checking your device\u2026',
-  'Checking transaction pattern\u2026',
-  'Checking recipient details\u2026',
-  'Finishing your safety check\u2026',
+// Staged status messages tied to ELAPSED TIME, not a decorative loop.
+// The old version cycled all four every 450ms regardless of what the backend
+// was doing, which reads as fake. These advance with the real wait, and after
+// ~8s the copy changes to acknowledge the delay instead of pretending.
+// Modelled on how UPI apps handle a slow bank response.
+const CHECK_STAGES: { at: number; icon: string; key: string }[] = [
+  { at: 0,  icon: 'smartphone', key: 'checking.device' },
+  { at: 2,  icon: 'activity',   key: 'checking.pattern' },
+  { at: 4,  icon: 'search',     key: 'checking.fraud' },
+  { at: 6,  icon: 'file-text',  key: 'checking.audit' },
+  { at: 8,  icon: 'clock',      key: 'checking.slow' },
+  { at: 14, icon: 'clock',      key: 'checking.stillSafe' },
 ];
 
 type Phase = 'checking' | 'result';
@@ -94,68 +117,95 @@ const normalizeDecision = (d: string | null | undefined): Decision => {
   return 'ALLOW';
 };
 
-// Map a numeric risk score → the zero-day "how unusual" bucket the UI shows.
-const zeroDayFromScore = (score: number, hint: string): ZeroDayClass => {
-  if (hint === 'FRAUD' || score >= 80) return 'UNKNOWN';
+// Map the BACKEND's risk score → the "how unusual" bucket the UI shows.
+// This used to take a locally-synthesised `hint` as well, which meant the
+// bucket could contradict the engine's own score. Score only, now.
+const zeroDayFromScore = (score: number): ZeroDayClass => {
+  if (score >= 80) return 'UNKNOWN';
   if (score >= 30) return 'SUSPICIOUS';
   return 'KNOWN';
 };
 
-// Pure-local fallback decision (mirrors the old simulator thresholds) so the
-// demo still resolves if the network is down.
-const localFallback = (input: SynthInput): RiskAssessment => {
-  const p = synthesizeProfile(input);
-  const map: Record<string, { decision: Decision; score: number }> = {
-    FRAUD: { decision: 'BLOCK', score: 92 },
-    SPIKE: { decision: 'WARN', score: 38 },
-    NEW_RECIPIENT: { decision: 'CHALLENGE', score: 55 },
-    CLEAN: { decision: 'ALLOW', score: 8 },
-  };
-  const r = map[p.hint];
-  return {
-    decision: r.decision,
-    riskScore: r.score,
-    zeroDayClass: zeroDayFromScore(r.score, p.hint),
-    signalIds: signalIdsFor(p.hint),
-  };
-};
-
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-// Animated rotating shield shown during the checking phase
+// Security-check progress: a real elapsed-time counter plus stage messages.
+// A spinner alone tells the customer nothing; a counter tells them the system
+// is alive and roughly how long it has been working, which is what stops
+// people force-quitting a payment mid-flight.
 const CheckingView = () => {
-  const spinAnim = useRef(new Animated.Value(0)).current;
-  const [stepIndex, setStepIndex] = useState(0);
+  const { t } = useI18n();
+  const pulse = useRef(new Animated.Value(0)).current;
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     Animated.loop(
-      Animated.timing(spinAnim, {
-        toValue: 1,
-        duration: 1400,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      })
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration: 900,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
     ).start();
 
-    const interval = setInterval(() => {
-      setStepIndex((i) => (i + 1) % CHECK_STEPS.length);
-    }, 450);
-    return () => clearInterval(interval);
+    const started = Date.now();
+    const id = setInterval(
+      () => setElapsed(Math.floor((Date.now() - started) / 1000)),
+      250
+    );
+    return () => clearInterval(id);
   }, []);
 
-  const spin = spinAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
-  });
+  // Last stage whose threshold we have passed.
+  const stage =
+    [...CHECK_STAGES].reverse().find((st) => elapsed >= st.at) || CHECK_STAGES[0];
+  const slow = elapsed >= 8;
+
+  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] });
+  const haloOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.08] });
 
   return (
     <View style={styles.checkingContainer}>
-      <Animated.View style={[styles.checkingIconWrap, { transform: [{ rotate: spin }] }]}>
-        <Feather name="shield" size={56} color={COLORS.primary} />
-      </Animated.View>
-      <Text style={styles.checkingTitle}>Checking your payment</Text>
-      <Text style={styles.checkingStep}>{CHECK_STEPS[stepIndex]}</Text>
-      <Text style={styles.checkingHint}>This usually takes just a few seconds</Text>
+      <View style={styles.checkingShieldStack}>
+        <Animated.View
+          style={[styles.checkingHalo, { opacity: haloOpacity, transform: [{ scale }] }]}
+        />
+        <View style={styles.checkingIconWrap}>
+          <Feather name="shield" size={52} color={COLORS.primary} />
+        </View>
+      </View>
+
+      <Text style={styles.checkingTitle}>{t('checking.title')}</Text>
+
+      <View style={styles.checkingStageRow}>
+        <Feather
+          name={stage.icon as any}
+          size={14}
+          color={slow ? COLORS.caution : COLORS.textSecondary}
+        />
+        <Text style={[styles.checkingStep, slow && { color: COLORS.caution }]}>
+          {t(stage.key)}
+        </Text>
+      </View>
+
+      {/* Elapsed-time counter — proof the system is working, not frozen */}
+      <View style={[styles.timerPill, slow && styles.timerPillSlow]}>
+        <Text style={[styles.timerValue, slow && { color: COLORS.caution }]}>{elapsed}</Text>
+        <Text style={[styles.timerUnit, slow && { color: COLORS.caution }]}>
+          {t('checking.seconds')}
+        </Text>
+      </View>
+
+      <Text style={styles.checkingHint}>
+        {slow ? t('checking.dontClose') : t('checking.engines')}
+      </Text>
     </View>
   );
 };
@@ -207,11 +257,16 @@ const SignalRow = ({
 const SecurityReviewScreen = ({ route, navigation }: any) => {
   const { transactionData } = route.params;
   const insets = useSafeAreaInsets();
+  const { t, language } = useI18n();
 
   const [phase, setPhase] = useState<Phase>('checking');
   const [assessment, setAssessment] = useState<RiskAssessment | null>(null);
+  // Task 5.14 — the live explainability engine's plain-language reason, in the
+  // customer's chosen language. The backend's own decision_report is the
+  // fallback, and the bundled JSON copy is the fallback of last resort, so this
+  // never leaves the customer staring at a decision with no explanation.
+  const [liveExplanation, setLiveExplanation] = useState<string | null>(null);
   const [expandedSignal, setExpandedSignal] = useState<string | null>(null);
-  const [mpin, setMpin] = useState('');
   const [processing, setProcessing] = useState(false); // initiate in flight
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -235,12 +290,6 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
     const startedAt = Date.now();
     const MIN_CHECK_MS = 1800; // keep the reassuring animation duration
 
-    const input: SynthInput = {
-      amount: transactionData.amount,
-      isNewRecipient: transactionData.isNewRecipient,
-    };
-    const profile = synthesizeProfile(input);
-
     const finish = (result: RiskAssessment) => {
       const elapsed = Date.now() - startedAt;
       const wait = Math.max(0, MIN_CHECK_MS - elapsed);
@@ -253,39 +302,80 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
 
     (async () => {
       try {
-        // 1) Fraud probability
-        const fraud = await api.evaluateFraud(buildFraudRequest(input));
-        const fraudProb = Number(fraud?.fraud_probability) || 0;
-        const confidence = Number(fraud?.confidence) || 0;
+        // Task 2.4: single backend call — the server runs the full pipeline
+        // (Behavior → Fraud ML → Zero-Day → Risk → Decision), audits it, and
+        // holds the investment as PENDING when a CHALLENGE is required.
+        const txn = await api.initiateTransaction({
+          account_id: transactionData.fromAccountId,
+          amount: transactionData.amount,
+          fund_name: transactionData.toLabel || 'Mutual Fund',
+          fund_category: transactionData.fundCategory || 'MUTUAL_FUND',
+          channel: (transactionData.channel || 'UPI') as any,
+        });
 
-        // 2) Risk score (combines synthesized signals + AI fraud output)
-        const risk = await api.evaluateRisk(buildRiskRequest(input, fraudProb, confidence));
-        const riskScore = Number(risk?.risk_score) || 0;
-
-        // 3) Final decision. We don't have a real transaction_id yet (money moves
-        //    on Continue), so we pass a placeholder for the decision preview.
-        const decisionRes = await api.makeDecision(
-          buildDecisionRequest(input, {
-            transactionId: 'preview',
-            accountId: transactionData.fromAccountId || 'self',
-            channel: transactionData.channel || transactionData.paymentMode || 'IMPS',
-            aiFraudProbability: fraudProb,
-            aiConfidence: confidence,
-          })
-        );
-
-        const decision = normalizeDecision(decisionRes?.decision);
-        const finalScore = Number(decisionRes?.risk_score ?? riskScore) || riskScore;
+        const decision = normalizeDecision(txn?.decision);
+        const finalScore = Number(txn?.risk_score) || 0;
 
         finish({
           decision,
           riskScore: finalScore,
-          zeroDayClass: zeroDayFromScore(finalScore, profile.hint),
-          signalIds: signalIdsFor(profile.hint),
+          zeroDayClass: zeroDayFromScore(finalScore),
+          // Real signals from the engine. If the backend sends none, we show
+          // "no concerns found" rather than inventing a list from the amount.
+          signalIds: Array.from(
+            new Set((txn?.triggered_signals || []).map(normalizeSignal))
+          ).filter((id) => id in signalDefs),
+          transactionId: txn?.transaction_id ?? null,
+          report: txn?.decision_report ?? null,
         });
+
+        // Explanation is supplementary: fetch it after the verdict is on
+        // screen and swallow any failure. The customer must never wait on it.
+        api
+          .explainDecision({
+            record: {
+              decision,
+              risk_score: finalScore,
+              amount: transactionData.amount,
+              fund_name: transactionData.toLabel,
+              challenge_required: decision === 'CHALLENGE',
+              decision_report: txn?.decision_report ?? null,
+            },
+            language,
+          })
+          .then((res) => {
+            if (!cancelled && res?.explanation) setLiveExplanation(res.explanation);
+          })
+          .catch(() => undefined);
       } catch (e) {
-        // Network/API failure → deterministic local fallback so the demo continues.
-        finish(localFallback(input));
+        if (cancelled) return;
+        const err = e as ApiError;
+
+        // A TIMEOUT is not a failure. The request reached the bank and may have
+        // completed — the server was simply slow to answer. Telling the customer
+        // it failed and offering "try again" is how you get a duplicate
+        // investment. Send them to their activity instead.
+        if (err instanceof ApiError && err.isTimeout) {
+          Alert.alert(t('review.timeoutTitle'), t('review.timeoutBody'), [
+            {
+              text: t('review.checkActivity'),
+              onPress: () => navigation.navigate('SafetyTab', { screen: 'MySecurityActivity' }),
+            },
+            { text: t('common.back'), onPress: () => navigation.goBack() },
+          ]);
+          return;
+        }
+
+        // Genuinely unreachable: nothing was sent, so it is safe to say so.
+        const msg =
+          err instanceof ApiError && err.isNetworkError
+            ? t('review.unreachable')
+            : err instanceof ApiError
+            ? err.message
+            : t('review.unreachable');
+        Alert.alert(t('review.failedTitle'), msg, [
+          { text: t('common.back'), onPress: () => navigation.goBack() },
+        ]);
       }
     })();
 
@@ -295,50 +385,10 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Initiate the real transaction, then go to the receipt ────────────────────
-  const initiateAndContinue = async () => {
+  // ── Continue to the receipt (investment already settled by the backend) ─────
+  const initiateAndContinue = () => {
     if (!assessment) return;
-
-    // If we don't have the identifiers needed to initiate, just show the receipt
-    // (keeps the flow working even if TransactionInitiate wasn't updated).
-    if (!transactionData.fromAccountId) {
-      navigation.navigate('TransactionResult', { transactionData, assessment });
-      return;
-    }
-
-    setProcessing(true);
-    try {
-      const txn = await api.initiateTransaction({
-        account_id: transactionData.fromAccountId,
-        amount: transactionData.amount,
-        merchant_name: transactionData.toLabel || 'Recipient',
-        merchant_category: 'Transfer',
-        channel: (transactionData.channel || 'IMPS') as any,
-      });
-
-      // Prefer the backend's decision on the actual transaction if present.
-      const backendDecision = normalizeDecision(txn?.decision ?? assessment.decision);
-      const finalAssessment: RiskAssessment = {
-        ...assessment,
-        decision: backendDecision,
-        transactionId: txn?.transaction_id ?? null,
-      };
-      navigation.navigate('TransactionResult', {
-        transactionData,
-        assessment: finalAssessment,
-      });
-    } catch (e) {
-      const err = e as ApiError;
-      const msg =
-        err instanceof ApiError && err.isNetworkError
-          ? 'We could not reach the server to complete your payment. Please try again.'
-          : err instanceof ApiError
-          ? err.message
-          : 'Something went wrong completing your payment.';
-      Alert.alert('Payment could not be completed', msg, [{ text: 'OK' }]);
-    } finally {
-      setProcessing(false);
-    }
+    navigation.navigate('TransactionResult', { transactionData, assessment });
   };
 
   // ── Navigation actions ──────────────────────────────────────────────────────
@@ -361,11 +411,6 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
       'Our security team will review this within 24 hours. We may contact you to verify a few details.',
       [{ text: 'OK', onPress: handleGoHome }]
     );
-  };
-
-  const handleVerify = () => {
-    if (mpin.length !== 4) return;
-    goToResult();
   };
 
   // ── Render: checking phase ───────────────────────────────────────────────────
@@ -401,14 +446,16 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
             <Feather name={decisionStyle.icon as any} size={40} color={decisionStyle.color} />
           </View>
           <Text style={[styles.decisionTitle, { color: decisionStyle.color }]}>
-            {decisionStyle.title}
+            {t(`decision.${assessment.decision}.title`)}
           </Text>
-          <Text style={styles.decisionSubtitle}>{decisionStyle.subtitle}</Text>
+          <Text style={styles.decisionSubtitle}>
+            {t(`decision.${assessment.decision}.subtitle`)}
+          </Text>
         </View>
 
         {/* ── Transaction summary ── */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Payment Details</Text>
+          <Text style={styles.cardTitle}>{t('review.txnDetails')}</Text>
           <DetailRow label="Amount" value={formatCurrency(transactionData.amount)} />
           <DetailRow
             label="To"
@@ -445,12 +492,12 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
 
         {/* ── What we checked ── */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>What We Checked</Text>
+          <Text style={styles.cardTitle}>{t('review.whatChecked')}</Text>
           {assessment.signalIds.length === 0 ? (
             <View style={styles.allClearRow}>
               <Feather name="check-circle" size={16} color={COLORS.success} />
               <Text style={styles.allClearText}>
-                Everything matches your usual activity — no concerns found.
+                {t('review.allClear')}
               </Text>
             </View>
           ) : (
@@ -476,24 +523,25 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
           </View>
         )}
 
-        {/* ── CHALLENGE: quick verification ── */}
+        {/* ── Live plain-language explanation (task 5.14) ──
+             Shown for ALLOW / WARN / BLOCK; CHALLENGE has its own card below
+             so the customer isn't told the same thing twice. */}
+        {liveExplanation && assessment.decision !== 'CHALLENGE' && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>{t('review.whatMeans')}</Text>
+            <Text style={styles.verifyHint}>{liveExplanation}</Text>
+          </View>
+        )}
+
+        {/* ── CHALLENGE: held for verification (task 4.3) ── */}
         {assessment.decision === 'CHALLENGE' && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Quick Verification</Text>
+            <Text style={styles.cardTitle}>{t('decision.CHALLENGE.title')}</Text>
             <Text style={styles.verifyHint}>
-              For your safety, please re-enter your 4-digit MPIN to confirm this payment.
+              {liveExplanation ||
+                assessment.report ||
+                'This investment looks unusual for your account, so we have placed it on hold. A quick identity check will complete it — no money has moved yet.'}
             </Text>
-            <TextInput
-              style={styles.mpinInput}
-              value={mpin}
-              onChangeText={(t) => setMpin(t.replace(/[^\d]/g, '').slice(0, 4))}
-              keyboardType="number-pad"
-              secureTextEntry
-              maxLength={4}
-              placeholder="\u2022 \u2022 \u2022 \u2022"
-              placeholderTextColor={COLORS.textTertiary}
-              textAlign="center"
-            />
           </View>
         )}
 
@@ -525,7 +573,7 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
                 {!processing && <Feather name="arrow-right" size={18} color={COLORS.textOnDark} />}
               </TouchableOpacity>
               <TouchableOpacity style={styles.textLinkBtn} onPress={handleCancel} activeOpacity={0.7}>
-                <Text style={styles.textLinkText}>Cancel and go back</Text>
+                <Text style={styles.textLinkText}>{t('review.cancelBack')}</Text>
               </TouchableOpacity>
             </>
           )}
@@ -533,18 +581,17 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
           {assessment.decision === 'CHALLENGE' && (
             <>
               <TouchableOpacity
-                style={[styles.primaryBtn, (mpin.length !== 4 || processing) && styles.primaryBtnDisabled]}
-                onPress={handleVerify}
-                disabled={mpin.length !== 4 || processing}
+                style={styles.primaryBtn}
+                onPress={() =>
+                  navigation.navigate('Challenge', { transactionData, assessment })
+                }
                 activeOpacity={0.8}
               >
                 <Feather name="shield" size={16} color={COLORS.textOnDark} />
-                <Text style={styles.primaryBtnText}>
-                  {processing ? 'Processing\u2026' : 'Verify & Continue'}
-                </Text>
+                <Text style={styles.primaryBtnText}>{t('review.verifyMe')}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.textLinkBtn} onPress={handleCancel} activeOpacity={0.7}>
-                <Text style={styles.textLinkText}>Cancel and go back</Text>
+              <TouchableOpacity style={styles.textLinkBtn} onPress={handleGoHome} activeOpacity={0.7}>
+                <Text style={styles.textLinkText}>{t('review.keepOnHold')}</Text>
               </TouchableOpacity>
             </>
           )}
@@ -553,7 +600,7 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
             <>
               <TouchableOpacity style={styles.primaryBtn} onPress={handleGoHome} activeOpacity={0.8}>
                 <Feather name="home" size={16} color={COLORS.textOnDark} />
-                <Text style={styles.primaryBtnText}>Go to Home</Text>
+                <Text style={styles.primaryBtnText}>{t('review.goHome')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.secondaryBtn}
@@ -561,7 +608,7 @@ const SecurityReviewScreen = ({ route, navigation }: any) => {
                 activeOpacity={0.8}
               >
                 <Feather name="flag" size={16} color={COLORS.primary} />
-                <Text style={styles.secondaryBtnText}>This Was Me — Report Issue</Text>
+                <Text style={styles.secondaryBtnText}>{t('review.thisWasMe')}</Text>
               </TouchableOpacity>
             </>
           )}
@@ -590,14 +637,54 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: SPACING.xl,
   },
+  checkingShieldStack: {
+    width: 128,
+    height: 128,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: SPACING.xl,
+  },
+  checkingHalo: {
+    position: 'absolute',
+    width: 128,
+    height: 128,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.primaryLight,
+  },
   checkingIconWrap: {
-    width: 96,
-    height: 96,
+    width: 92,
+    height: 92,
     borderRadius: BORDER_RADIUS.full,
     backgroundColor: COLORS.primaryVeryLight,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: SPACING.xl,
+  },
+  checkingStageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginBottom: SPACING.lg,
+  },
+  timerPill: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 4,
+    borderWidth: 1.5,
+    borderColor: COLORS.primaryLight,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    marginBottom: SPACING.lg,
+    minWidth: 108,
+    justifyContent: 'center',
+  },
+  timerPillSlow: { borderColor: COLORS.caution },
+  timerValue: { ...TYPOGRAPHY.h3, color: COLORS.primary, fontWeight: '800' },
+  timerUnit: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.primary,
+    fontWeight: '800',
+    letterSpacing: 1,
   },
   checkingTitle: {
     ...TYPOGRAPHY.h3,
@@ -608,11 +695,12 @@ const styles = StyleSheet.create({
   checkingStep: {
     ...TYPOGRAPHY.bodySm,
     color: COLORS.textSecondary,
-    marginBottom: SPACING.xl,
   },
   checkingHint: {
     ...TYPOGRAPHY.caption,
     color: COLORS.textTertiary,
+    textAlign: 'center',
+    lineHeight: 17,
   },
 
   // Decision header

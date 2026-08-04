@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from .security_rules import (
-    RISK_BANDS, COMPLIANCE_NOTE,
+    Challenge, RISK_BANDS, COMPLIANCE_NOTE,
     DECISION_ALLOW, DECISION_WARN, DECISION_CHALLENGE, DECISION_BLOCK,
 )
 from .risk_engine import RiskEvaluationInput, RiskEvaluationOutput, evaluate_risk
@@ -115,6 +115,15 @@ class DecisionEngine:
 
         # STEP 2 — base decision from risk band
         decision = self._band_for(risk.risk_score)
+
+        # STEP 2b — mandatory step-up signals (task 4.2/4.3).
+        # Certain behaviours must be verified by the customer regardless of the
+        # numeric band; the score alone can under-react when every other
+        # signal (trusted device, known fund, normal hour) looks clean.
+        active_signals = set(risk.security_signals.get("active_behavior", []))
+        mandatory = active_signals & Challenge.MANDATORY_CHALLENGE_SIGNALS
+        if mandatory:
+            decision = self._stricter(decision, DECISION_CHALLENGE)
 
         # STEP 3 — fold in UNKNOWN_RISK recommendation (stricter wins)
         unknown_applied = False

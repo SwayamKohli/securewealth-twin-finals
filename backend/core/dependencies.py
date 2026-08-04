@@ -208,6 +208,10 @@ def get_replica_verifier(
 
     return ReplicaVerifier(
         AuditRepository(db),
+        signature_service=get_signature_service(),
+        public_key=SignatureService.load_public_key(
+            Path("keys/audit_public_key.pem").read_bytes()
+        ),
     )
 
 def get_recovery_service(
@@ -259,7 +263,13 @@ def build_tamper_monitor() -> TamperMonitor:
         signature_service=signature_service,
     )
 
-    replica_verifier = ReplicaVerifier(repository)
+    replica_verifier = ReplicaVerifier(
+        repository,
+        signature_service=signature_service,
+        public_key=SignatureService.load_public_key(
+            Path("keys/audit_public_key.pem").read_bytes()
+        ),
+    )
 
     recovery_service = RecoveryService(repository)
 

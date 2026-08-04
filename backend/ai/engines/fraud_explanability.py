@@ -1,14 +1,24 @@
 import json
 import requests
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from security.risk_engine import RiskEvaluationOutput
+from ai.engines import llm_source
 
 def generate_risk_breakdown(output: RiskEvaluationOutput, ollama_url: str = "http://localhost:11434") -> str:
     """
     Takes a RiskEvaluationOutput and passes its sub-scores and weights to Ollama
     to generate an easy-to-understand breakdown of what factors influenced the risk score.
     """
-    out_dict = asdict(output)
+    # The API layer receives JSON, so `output` may be a plain dict rather than
+    # the RiskEvaluationOutput dataclass this engine was written against.
+    # asdict() raises on anything that is not a dataclass instance, which is
+    # exactly what /explainability/risk was doing. Accept both.
+    if isinstance(output, dict):
+        out_dict = output
+    elif is_dataclass(output):
+        out_dict = asdict(output)
+    else:
+        out_dict = dict(getattr(output, "__dict__", {}) or {})
     signals = out_dict.get("security_signals", {})
     sub_scores = signals.get("sub_scores", {})
     env = signals.get("environment", {})
@@ -52,19 +62,24 @@ def generate_risk_breakdown(output: RiskEvaluationOutput, ollama_url: str = "htt
                 "model": "llama3:latest",
                 "prompt": prompt,
                 "stream": False,
+                "keep_alive": llm_source.KEEP_ALIVE,
                 "options": {
                     "temperature": 0.2,
                     "top_p": 0.9
                 }
             },
-            timeout=10
+            timeout=llm_source.GENERATE_TIMEOUT
         )
         if response.status_code == 200:
-            return response.json().get("response", "").strip()
+            llm_source.mark(llm_source.LLM)
+            return llm_source.tidy(response.json().get("response", ""))
+        llm_source.mark(llm_source.FALLBACK)
         return "Your transaction profile has been evaluated smoothly by our security network."
     except requests.exceptions.RequestException:
         # Simple non-technical fallback text
         score = out_dict.get("risk_score", 0)
         if score > 50:
+            llm_source.mark(llm_source.FALLBACK)
             return "Our system noticed some unusual changes in your current login location and network connection, so we are reviewing this activity to keep your funds safe."
+        llm_source.mark(llm_source.FALLBACK)
         return "Everything looks great! Your transaction details perfectly match your normal daily spending patterns."

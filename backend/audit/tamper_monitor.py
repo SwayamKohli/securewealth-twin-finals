@@ -106,6 +106,15 @@ class TamperMonitor:
 
                 recoveries_attempted += 1
 
+                # Record the ATTACK itself before repairing it, so the
+                # dashboard shows both "what was attempted" and "how the
+                # system responded".
+                self._audit.log_tamper_event(
+                    audit_id=record.audit_id,
+                    corrupted_copies=verification.corrupted_copies,
+                    detail=verification.comparison,
+                )
+
                 recovery = self._recovery.recover(
                     verification,
                 )
@@ -119,6 +128,11 @@ class TamperMonitor:
                         recovery_note=recovery.message,
                         recovered_from=recovery.source_copy,
                     )
+
+                # Repairs and their audit entries are only flushed to the
+                # session by the repositories — persist them, otherwise every
+                # sweep re-detects the same tamper and no evidence survives.
+                self._commit()
 
                 findings.append(
                     {
@@ -169,6 +183,17 @@ class TamperMonitor:
 
             findings=findings,
         )
+
+    def _commit(self) -> None:
+        """Persist repairs + audit entries written during this sweep."""
+        session = getattr(self._verifier, "_repo", None)
+        session = getattr(session, "db", None)
+        if session is not None:
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
 
     @staticmethod
     def _to_dict(

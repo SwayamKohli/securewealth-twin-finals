@@ -108,6 +108,23 @@ const GLOSSARY_TERMS = {
     title: 'SIP (Systematic Investment Plan)',
     body: 'You invest a fixed amount regularly (usually monthly). Over the long term, this can help your money grow.',
   },
+  // Task 1.4 — mandated tooltip terms
+  ACCOUNT_AGGREGATION: {
+    title: 'Account Aggregation',
+    body: 'Securely combines accounts from multiple banks into one dashboard after your consent — so you see your complete financial picture in one place.',
+  },
+  TRUSTED_DEVICE: {
+    title: 'Trusted Device',
+    body: 'A verified device recognised by the system for secure banking. Investments from trusted devices need fewer security checks.',
+  },
+  CHALLENGE: {
+    title: 'Challenge',
+    body: 'Additional identity verification required before completing an investment — used only when something looks unusual, to keep your money safe.',
+  },
+  MUTUAL_FUND: {
+    title: 'Mutual Fund',
+    body: 'A pool of money from many investors, managed professionally and invested across many companies or bonds — so your risk is spread out.',
+  },
 } as const;
 
 export type GlossaryTermKey = keyof typeof GLOSSARY_TERMS;
@@ -144,7 +161,14 @@ const GlossaryPopup: React.FC<GlossaryPopupProps> = ({ term, children }) => {
 
   return (
     <>
-      <TouchableOpacity onPress={open} activeOpacity={0.6} hitSlop={8} style={styles.trigger}>
+      <TouchableOpacity
+        onPress={open}
+        activeOpacity={0.6}
+        hitSlop={14}
+        style={styles.trigger}
+        accessibilityRole="button"
+        accessibilityHint="Opens a short explanation of this term"
+      >
         {children || <Feather name="help-circle" size={16} color={COLORS.textTertiary} />}
       </TouchableOpacity>
 
@@ -161,7 +185,12 @@ const GlossaryPopup: React.FC<GlossaryPopupProps> = ({ term, children }) => {
                   <Text style={styles.termTitle} numberOfLines={2}>
                     {entry.title}
                   </Text>
-                  <TouchableOpacity onPress={close} hitSlop={8}>
+                  <TouchableOpacity
+                    onPress={close}
+                    hitSlop={14}
+                    accessibilityRole="button"
+                    accessibilityLabel="Close"
+                  >
                     <Feather name="x" size={20} color={COLORS.textTertiary} />
                   </TouchableOpacity>
                 </View>

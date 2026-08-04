@@ -69,12 +69,32 @@ class AuditScheduler:
                     report.recoveries_succeeded,
                 )
 
-            except Exception:
+            except Exception as exc:
 
-                logger.exception(
-                    "Audit integrity monitoring failed."
+                # A dropped pooled connection (managed Postgres idle timeout)
+                # leaves this scheduler's long-lived Session in a broken state.
+                # Roll it back so the next cycle gets a fresh connection
+                # instead of failing forever.
+                logger.warning(
+                    "Audit integrity check failed (%s). "
+                    "Resetting the session and retrying next cycle.",
+                    exc.__class__.__name__,
                 )
+                self._reset_session()
 
             await asyncio.sleep(
                 self._interval
             )
+
+    def _reset_session(self) -> None:
+        """Roll back the monitor's DB session after a connection failure."""
+        for attr in ("_audit", "_repo", "_verifier", "_recovery"):
+            obj = getattr(self._monitor, attr, None)
+            db = getattr(obj, "db", None) or getattr(
+                getattr(obj, "_repo", None), "db", None
+            )
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass

@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SecureWealth Twin — Admin Audit Console</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   SecureWealth Twin — Admin Console
+   Palette: Punjab & Sind Bank green + wealth gold, on a warm sage-tinted
+   surface. Glassmorphic panels, Lucide iconography, fully responsive.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --green:#006837; --green-dark:#004D2D; --green-mid:#005A30; --green-soft:#E3F1E7;
+  --gold:#D4AF37; --gold-soft:#F7EFD4; --gold-deep:#8A6D1B;
+  --allow:#0E9F6E; --warn:#D97706; --challenge:#4F46E5; --block:#DC2626;
+  --allow-bg:rgba(14,159,110,.13); --warn-bg:rgba(217,119,6,.13);
+  --challenge-bg:rgba(79,70,229,.13); --block-bg:rgba(220,38,38,.13);
+
+  /* Warm sage/gold tinted canvas — neither stark white nor dark */
+  --canvas-1:#EAF2E9; --canvas-2:#F2F1E4; --canvas-3:#E4EEE6;
+
+  --glass:rgba(255,255,255,.62);
+  --glass-strong:rgba(255,255,255,.78);
+  --glass-brd:rgba(255,255,255,.75);
+  --hairline:rgba(0,104,55,.13);
+
+  --ink:#16281E; --ink-2:#43584C; --ink-3:#7C8F84;
+  --mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
+  --sh-s:0 1px 2px rgba(16,40,24,.06);
+  --sh-m:0 6px 20px rgba(16,40,24,.09);
+  --sh-l:0 18px 48px rgba(16,40,24,.16);
+  --r:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  min-height:100vh;color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  background:
+    radial-gradient(1100px 620px at 8% -8%, rgba(0,104,55,.14), transparent 60%),
+    radial-gradient(900px 540px at 96% 4%, rgba(212,175,55,.20), transparent 62%),
+    linear-gradient(160deg,var(--canvas-1) 0%,var(--canvas-2) 48%,var(--canvas-3) 100%);
+  background-attachment:fixed;
+}
+.i{width:16px;height:16px;stroke-width:2.1;flex:none}
+.i-lg{width:22px;height:22px}
+.i-xl{width:26px;height:26px}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+header{
+  position:sticky;top:0;z-index:40;
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  flex-wrap:wrap;padding:14px clamp(16px,3vw,34px);
+  background:linear-gradient(120deg,rgba(0,77,45,.94),rgba(0,104,55,.90));
+  backdrop-filter:blur(18px) saturate(150%);
+  -webkit-backdrop-filter:blur(18px) saturate(150%);
+  border-bottom:1px solid rgba(255,255,255,.14);
+  box-shadow:var(--sh-m);color:#fff;
+}
+.brand{display:flex;align-items:center;gap:13px;min-width:0}
+.brand-mark{
+  width:42px;height:42px;border-radius:13px;flex:none;display:grid;place-items:center;
+  background:linear-gradient(145deg,rgba(212,175,55,.34),rgba(255,255,255,.12));
+  border:1px solid rgba(255,255,255,.28);color:var(--gold);
+}
+.brand h1{font-size:clamp(15px,2vw,18px);font-weight:750;letter-spacing:.2px;white-space:nowrap}
+.brand h1 em{font-style:normal;color:var(--gold)}
+.brand .sub{font-size:11.5px;color:#B7E4C9;margin-top:2px}
+.conn{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.conn input{
+  background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.24);
+  color:#fff;border-radius:10px;padding:9px 12px;font-size:12.5px;
+  width:clamp(120px,15vw,190px);font-family:inherit;
+}
+.conn input::placeholder{color:rgba(255,255,255,.62)}
+.conn input:focus{outline:none;border-color:var(--gold);background:rgba(255,255,255,.19)}
+.chip{
+  display:flex;align-items:center;gap:7px;padding:8px 14px;border-radius:999px;
+  background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.24);
+  font-size:12px;font-weight:650;white-space:nowrap;
+}
+.dot{width:8px;height:8px;border-radius:50%;background:#F87171;transition:.3s}
+.dot.ok{background:#4ADE80;box-shadow:0 0 0 4px rgba(74,222,128,.22);animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 4px rgba(74,222,128,.22)}50%{box-shadow:0 0 0 8px rgba(74,222,128,0)}}
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+button{
+  font-family:inherit;cursor:pointer;border:none;border-radius:10px;
+  font-weight:700;font-size:12.5px;padding:9px 16px;
+  display:inline-flex;align-items:center;gap:7px;
+  transition:transform .12s,box-shadow .2s,filter .2s;
+}
+button:hover{filter:brightness(1.05);transform:translateY(-1px)}
+button:active{transform:translateY(0)}
+.btn-gold{background:linear-gradient(135deg,var(--gold),#C39B2A);color:#3A2E05;box-shadow:var(--sh-s)}
+.btn-green{background:linear-gradient(135deg,var(--green),var(--green-dark));color:#fff;box-shadow:var(--sh-s)}
+.btn-ghost{background:var(--glass);color:var(--ink-2);border:1px solid var(--hairline);backdrop-filter:blur(8px)}
+.btn-ghost:disabled{opacity:.45;cursor:not-allowed;transform:none}
+
+main{padding:clamp(16px,2.6vw,28px) clamp(14px,3vw,34px) 70px;max-width:1360px;margin:0 auto}
+
+/* ── Tabs ───────────────────────────────────────────────────────────────── */
+.tabs{
+  display:flex;gap:5px;margin-bottom:20px;padding:5px;width:fit-content;max-width:100%;
+  background:var(--glass);border:1px solid var(--glass-brd);border-radius:14px;
+  backdrop-filter:blur(14px);box-shadow:var(--sh-s);overflow-x:auto;
+}
+.tab{background:transparent;color:var(--ink-2);padding:9px 18px;border-radius:10px;white-space:nowrap}
+.tab.active{background:linear-gradient(135deg,var(--green),var(--green-dark));color:#fff;box-shadow:var(--sh-s)}
+
+/* ── Glass cards ────────────────────────────────────────────────────────── */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:13px;margin-bottom:20px}
+.card{
+  position:relative;overflow:hidden;padding:16px 18px;border-radius:var(--r);
+  background:var(--glass);border:1px solid var(--glass-brd);
+  backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);
+  box-shadow:var(--sh-s);transition:transform .2s,box-shadow .2s;
+}
+.card:hover{transform:translateY(-2px);box-shadow:var(--sh-m)}
+.card::before{content:'';position:absolute;inset:0 auto 0 0;width:3px;background:var(--green)}
+.card .top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card .label{color:var(--ink-3);font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.9px}
+.card .ico{color:var(--ink-3);opacity:.65}
+.card .value{font-size:clamp(21px,2.6vw,28px);font-weight:800;margin-top:8px;letter-spacing:-.5px}
+.card .foot{font-size:11px;color:var(--ink-3);margin-top:3px}
+.card.allow::before{background:var(--allow)} .card.allow .value{color:var(--allow)} .card.allow .ico{color:var(--allow)}
+.card.warn::before{background:var(--warn)} .card.warn .value{color:var(--warn)} .card.warn .ico{color:var(--warn)}
+.card.challenge::before{background:var(--challenge)} .card.challenge .value{color:var(--challenge)} .card.challenge .ico{color:var(--challenge)}
+.card.block::before{background:var(--block)} .card.block .value{color:var(--block)} .card.block .ico{color:var(--block)}
+.card.wealth::before{background:var(--gold)} .card.wealth .value{color:var(--gold-deep)} .card.wealth .ico{color:var(--gold-deep)}
+.card.wealth{background:linear-gradient(135deg,rgba(247,239,212,.78),rgba(255,255,255,.5))}
+
+/* ── Panels ─────────────────────────────────────────────────────────────── */
+.panel{
+  border-radius:var(--r);margin-bottom:18px;overflow:hidden;
+  background:var(--glass);border:1px solid var(--glass-brd);
+  backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);
+  box-shadow:var(--sh-s);
+}
+.panel-head{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  padding:14px 18px;border-bottom:1px solid var(--hairline);background:var(--glass-strong);
+}
+.panel-head h2{font-size:13.5px;font-weight:750;display:flex;align-items:center;gap:9px}
+.panel-head h2 svg{color:var(--green)}
+.hint{font-size:11.5px;color:var(--ink-3);font-weight:400}
+.panel-body{padding:16px 18px}
+
+/* ── Integrity seal (the USP) ───────────────────────────────────────────── */
+.integrity{
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:18px 20px;border-radius:14px;
+  background:linear-gradient(135deg,rgba(227,241,231,.85),rgba(255,255,255,.5));
+  border:1px solid rgba(0,104,55,.18);transition:.35s;
+}
+.seal{width:54px;height:54px;border-radius:50%;flex:none;display:grid;place-items:center;
+  background:rgba(0,104,55,.12);color:var(--green)}
+.integrity .status{font-weight:800;font-size:16px;color:var(--green-dark);letter-spacing:-.2px}
+.integrity .detail{font-size:12px;color:var(--ink-2);margin-top:4px;line-height:1.5}
+.integrity.bad{background:linear-gradient(135deg,rgba(254,226,226,.85),rgba(255,255,255,.5));
+  border-color:rgba(220,38,38,.28);animation:shake .55s}
+.integrity.bad .seal{background:var(--block-bg);color:var(--block)}
+.integrity.bad .status{color:var(--block)}
+.integrity.checking .seal{animation:spin 1.1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Filters ────────────────────────────────────────────────────────────── */
+.filters{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:14px}
+.filters input,.filters select{
+  background:var(--glass-strong);border:1px solid var(--hairline);color:var(--ink);
+  border-radius:10px;padding:9px 12px;font-size:13px;font-family:inherit;
+}
+.filters input:focus,.filters select:focus{
+  outline:none;border-color:var(--green);box-shadow:0 0 0 3px rgba(0,104,55,.12)}
+
+/* ── Tables (responsive: collapse to cards on small screens) ─────────────── */
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
+th{
+  text-align:left;color:var(--ink-3);font-size:10px;font-weight:750;
+  text-transform:uppercase;letter-spacing:.8px;padding:11px 12px;
+  border-bottom:1.5px solid var(--hairline);white-space:nowrap;
+}
+td{padding:13px 12px;border-bottom:1px solid rgba(0,104,55,.07);vertical-align:top}
+tbody tr{transition:background .15s}
+tbody tr:hover td{background:rgba(0,104,55,.045)}
+.amount{font-weight:750;color:var(--green-dark)}
+
+.pill{
+  display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border-radius:999px;
+  font-size:10.5px;font-weight:800;letter-spacing:.4px;white-space:nowrap;
+}
+.pill svg{width:12px;height:12px}
+.pill.ALLOW,.pill.SUCCESS{background:var(--allow-bg);color:#047857}
+.pill.WARN,.pill.PENDING{background:var(--warn-bg);color:#B45309}
+.pill.CHALLENGE{background:var(--challenge-bg);color:#4338CA}
+.pill.BLOCK,.pill.FAILED{background:var(--block-bg);color:#B91C1C}
+
+.risk{display:flex;align-items:center;gap:8px;min-width:94px}
+.risk-bar{flex:1;height:6px;border-radius:3px;background:rgba(0,104,55,.12);overflow:hidden}
+.risk-fill{height:100%;border-radius:3px;transition:width .5s}
+.risk-num{font-weight:800;font-size:12px;min-width:22px}
+
+.chain{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);line-height:1.75}
+.chain b{color:var(--green);font-weight:700}
+.chain-link{display:flex;align-items:center;gap:5px}
+.chain-link svg{width:11px;height:11px;color:var(--green);opacity:.7}
+
+/* ── Feed items ─────────────────────────────────────────────────────────── */
+.feed-item{
+  display:flex;align-items:center;gap:13px;padding:13px 15px;border-radius:12px;
+  margin-bottom:8px;background:var(--glass-strong);border:1px solid var(--hairline);
+  border-left:4px solid var(--warn);animation:slideIn .45s cubic-bezier(.2,.8,.3,1);
+}
+.feed-item.BLOCK,.feed-item.TAMPER{border-left-color:var(--block);background:rgba(254,242,242,.72)}
+.feed-item.CHALLENGE,.feed-item.HEAL{border-left-color:var(--challenge);background:rgba(238,242,255,.72)}
+.feed-item.WARN{border-left-color:var(--warn);background:rgba(255,251,235,.72)}
+.feed-item.fresh{animation:slideIn .45s cubic-bezier(.2,.8,.3,1),flash 1.6s ease}
+@keyframes flash{0%,100%{box-shadow:none}25%{box-shadow:0 0 0 4px rgba(220,38,38,.20)}}
+.feed-ico{width:38px;height:38px;border-radius:11px;flex:none;display:grid;place-items:center}
+.feed-body{flex:1;min-width:0}
+.feed-title{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.feed-meta{font-size:11.5px;color:var(--ink-3);margin-top:4px;word-break:break-word}
+.feed-time{font-size:11px;color:var(--ink-3);white-space:nowrap}
+
+.empty{text-align:center;padding:34px 18px;color:var(--ink-3);font-size:13px}
+.empty svg{width:30px;height:30px;margin-bottom:10px;opacity:.4}
+.pager{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding:13px 18px;
+  border-top:1px solid var(--hairline);color:var(--ink-3);font-size:12px}
+
+/* ── Connection help banner ─────────────────────────────────────────────── */
+.conn-help{
+  display:flex;align-items:center;gap:14px;padding:15px 18px;border-radius:14px;
+  margin-bottom:16px;background:linear-gradient(135deg,rgba(220,38,38,.09),rgba(255,255,255,.5));
+  border:1px solid rgba(220,38,38,.22);flex-wrap:wrap;
+}
+.conn-help .ico{width:40px;height:40px;border-radius:12px;flex:none;display:grid;
+  place-items:center;background:var(--block-bg);color:var(--block)}
+.conn-help h3{font-size:13.5px;font-weight:800;color:var(--block)}
+.conn-help p{font-size:12.5px;color:var(--ink-2);margin-top:3px;line-height:1.6}
+.conn-help code{font-family:var(--mono);font-size:11.5px;background:rgba(0,104,55,.09);
+  padding:2px 6px;border-radius:5px;color:var(--green-dark)}
+
+/* ── Red Team console ───────────────────────────────────────────────────── */
+.rt-banner{
+  display:flex;align-items:center;gap:14px;padding:15px 18px;border-radius:14px;
+  margin-bottom:16px;background:linear-gradient(135deg,rgba(220,38,38,.10),rgba(212,175,55,.12));
+  border:1px solid rgba(220,38,38,.22);
+}
+.rt-banner .ico{width:42px;height:42px;border-radius:12px;flex:none;display:grid;
+  place-items:center;background:var(--block-bg);color:var(--block)}
+.rt-banner h3{font-size:14px;font-weight:800;color:var(--block)}
+.rt-banner p{font-size:12.5px;color:var(--ink-2);margin-top:3px;line-height:1.5}
+
+.rt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:13px}
+.rt-card{
+  display:flex;flex-direction:column;gap:9px;padding:16px;border-radius:var(--r);
+  background:var(--glass);border:1px solid var(--glass-brd);
+  backdrop-filter:blur(14px);box-shadow:var(--sh-s);transition:.2s;
+}
+.rt-card:hover{transform:translateY(-2px);box-shadow:var(--sh-m)}
+.rt-card.running{border-color:rgba(217,119,6,.5);box-shadow:0 0 0 3px rgba(217,119,6,.14)}
+.rt-card.DEFENDED{border-color:rgba(14,159,110,.5);box-shadow:0 0 0 3px rgba(14,159,110,.12)}
+.rt-card.BREACHED{border-color:rgba(220,38,38,.55);box-shadow:0 0 0 3px rgba(220,38,38,.16)}
+.rt-top{display:flex;align-items:flex-start;gap:11px}
+.rt-ico{width:38px;height:38px;border-radius:11px;flex:none;display:grid;place-items:center;
+  background:var(--block-bg);color:var(--block)}
+.rt-ico.info{background:rgba(0,104,55,.12);color:var(--green)}
+.rt-name{font-weight:750;font-size:13.5px;line-height:1.3}
+.rt-cat{font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.7px;
+  color:var(--ink-3);margin-top:3px}
+.rt-desc{font-size:12px;color:var(--ink-2);line-height:1.55}
+.rt-exp{font-size:11.5px;color:var(--green);display:flex;gap:6px;align-items:flex-start;line-height:1.5}
+.rt-exp svg{margin-top:2px;flex:none;width:13px;height:13px}
+.rt-actions{display:flex;gap:8px;align-items:center;margin-top:auto;padding-top:4px}
+.sev{padding:3px 9px;border-radius:999px;font-size:9.5px;font-weight:800;letter-spacing:.5px}
+.sev.critical{background:var(--block-bg);color:#B91C1C}
+.sev.high{background:var(--warn-bg);color:#B45309}
+.sev.medium{background:var(--challenge-bg);color:#4338CA}
+.sev.info{background:var(--allow-bg);color:#047857}
+
+/* Result timeline */
+.rt-result{margin-top:11px;padding-top:11px;border-top:1px dashed var(--hairline)}
+.rt-verdict{display:flex;align-items:center;gap:9px;font-weight:800;font-size:12.5px;margin-bottom:9px}
+.rt-verdict.DEFENDED{color:var(--allow)} .rt-verdict.BREACHED{color:var(--block)}
+.rt-verdict.ERROR{color:var(--warn)}
+.rt-summary{font-size:12px;color:var(--ink-2);margin-bottom:11px;line-height:1.5}
+.tl{list-style:none;position:relative;padding-left:22px}
+.tl::before{content:'';position:absolute;left:7px;top:6px;bottom:6px;width:2px;
+  background:linear-gradient(var(--hairline),transparent)}
+.tl li{position:relative;padding:0 0 12px 2px;font-size:12px;line-height:1.55;color:var(--ink-2)}
+.tl li::before{content:'';position:absolute;left:-19px;top:5px;width:10px;height:10px;
+  border-radius:50%;background:var(--ink-3);border:2px solid #fff;box-shadow:0 0 0 1px var(--hairline)}
+.tl li.PASS::before{background:var(--allow)}
+.tl li.FAIL::before{background:var(--block)}
+.tl li.ATTACK::before{background:var(--block);animation:pulseDot 1.4s ease infinite}
+.tl li.INFO::before{background:var(--ink-3)}
+@keyframes pulseDot{0%,100%{box-shadow:0 0 0 1px var(--hairline)}50%{box-shadow:0 0 0 5px rgba(220,38,38,.22)}}
+.tl b{color:var(--ink);font-weight:750;display:block;margin-bottom:2px}
+.spinner{width:13px;height:13px;border:2px solid rgba(255,255,255,.45);
+  border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+
+/* ── Alert toast: slides in, shakes the page ────────────────────────────── */
+.toast{
+  position:fixed;right:22px;bottom:22px;z-index:90;display:none;max-width:min(400px,calc(100vw - 40px));
+  padding:15px 18px;border-radius:15px;border-left:5px solid var(--block);
+  background:var(--glass-strong);backdrop-filter:blur(20px) saturate(160%);
+  -webkit-backdrop-filter:blur(20px) saturate(160%);
+  border-top:1px solid var(--glass-brd);border-right:1px solid var(--glass-brd);
+  border-bottom:1px solid var(--glass-brd);box-shadow:var(--sh-l);
+}
+.toast.show{display:flex;gap:12px;align-items:flex-start;animation:toastIn .42s cubic-bezier(.2,.9,.3,1.2)}
+.toast .t-ico{width:36px;height:36px;border-radius:11px;flex:none;display:grid;place-items:center;
+  background:var(--block-bg);color:var(--block)}
+.toast .t-title{font-weight:800;font-size:13.5px;color:var(--block)}
+.toast .t-body{font-size:12.5px;color:var(--ink-2);margin-top:4px;line-height:1.5}
+@keyframes toastIn{0%{opacity:0;transform:translateX(60px) scale(.9)}100%{opacity:1;transform:none}}
+@keyframes slideIn{from{opacity:0;transform:translateY(-9px)}to{opacity:1;transform:none}}
+
+/* Screen shake on a new fraud alert */
+@keyframes shake{
+  0%,100%{transform:translateX(0)}
+  12%{transform:translateX(-9px)} 26%{transform:translateX(8px)}
+  40%{transform:translateX(-6px)} 54%{transform:translateX(5px)}
+  68%{transform:translateX(-3px)} 82%{transform:translateX(2px)}
+}
+body.alerting{animation:shake .55s cubic-bezier(.36,.07,.19,.97)}
+body.alerting::after{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:80;
+  box-shadow:inset 0 0 130px rgba(220,38,38,.30);animation:glow 1s ease;
+}
+@keyframes glow{0%,100%{opacity:0}30%{opacity:1}}
+
+@media (max-width:720px){
+  .conn input{width:100%}
+  .conn{width:100%}
+  header{padding:12px 16px}
+  .toast{right:12px;left:12px;bottom:12px;max-width:none}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark"><span data-ico="shield-check" class="i-lg"></span></div>
+    <div>
+      <h1>SecureWealth <em>Twin</em> · Admin Console</h1>
+      <div class="sub">Immutable Fraud Audit &amp; Live Security Monitoring</div>
+    </div>
+  </div>
+  <div class="conn">
+    <div class="chip"><span id="connDot" class="dot"></span><span id="connText">Offline</span></div>
+    <input id="apiUrl" placeholder="API URL" />
+    <input id="adminKey" placeholder="Admin key" type="password" />
+    <button class="btn-gold" onclick="connect()"><span data-ico="plug-zap" class="i"></span>Connect</button>
+  </div>
+</header>
+
+<main>
+  <div class="tabs">
+    <button class="tab active" data-tab="overview" onclick="showTab('overview')">
+      <span data-ico="layout-dashboard" class="i"></span>Overview</button>
+    <button class="tab" data-tab="audit" onclick="showTab('audit')">
+      <span data-ico="scroll-text" class="i"></span>Audit Log</button>
+    <button class="tab" data-tab="investments" onclick="showTab('investments')">
+      <span data-ico="trending-up" class="i"></span>Investments</button>
+    <button class="tab" data-tab="redteam" onclick="showTab('redteam')">
+      <span data-ico="swords" class="i"></span>Red Team</button>
+  </div>
+
+  <div class="conn-help" id="connHelp" style="display:none">
+    <div class="ico"><span data-ico="shield-x" class="i-lg"></span></div>
+    <div><h3>Not connected to the backend</h3>
+      <p id="connHelpText"></p></div>
+    <button class="btn-green" onclick="connect()" style="margin-left:auto">
+      <span data-ico="refresh-cw" class="i"></span>Retry</button>
+  </div>
+
+  <!-- ══ OVERVIEW ══ -->
+  <section id="tab-overview">
+    <div class="cards" id="statCards"></div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2><span data-ico="fingerprint" class="i-lg"></span>Audit Chain Integrity
+          <span class="hint">every decision is hash-chained and digitally signed</span></h2>
+        <button class="btn-green" onclick="checkIntegrity()">
+          <span data-ico="scan-search" class="i"></span>Verify chain now</button>
+      </div>
+      <div class="panel-body">
+        <div class="integrity" id="integrityBox">
+          <div class="seal" id="integritySeal"><span data-ico="search" class="i-xl"></span></div>
+          <div>
+            <div class="status" id="integrityStatus">Not verified yet</div>
+            <div class="detail" id="integrityDetail">
+              Re-hashes every record and re-checks every signature against the replica set.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2><span data-ico="shield-alert" class="i-lg"></span>Audit Defence
+          <span class="hint">tamper attempts &amp; self-healing recoveries</span></h2>
+        <button class="btn-ghost" onclick="loadSecurityEvents()">
+          <span data-ico="refresh-cw" class="i"></span>Refresh</button>
+      </div>
+      <div class="panel-body" id="defenceFeed">
+        <div class="empty"><span data-ico="lock-keyhole" class="i-lg"></span>
+          <div>No tampering detected. The audit chain has never been altered.</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2><span data-ico="siren" class="i-lg"></span>Live Fraud Alerts
+          <span class="hint">auto-refreshing every 5 seconds</span></h2>
+      </div>
+      <div class="panel-body" id="alertFeed">
+        <div class="empty"><span data-ico="radar" class="i-lg"></span><div>Monitoring for fraud attempts…</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ AUDIT ══ -->
+  <section id="tab-audit" style="display:none">
+    <div class="panel">
+      <div class="panel-head"><h2><span data-ico="scroll-text" class="i-lg"></span>Immutable Audit Records</h2></div>
+      <div class="panel-body">
+        <div class="filters">
+          <input id="aSearch" placeholder="Search transaction, customer or note…" style="flex:1;min-width:220px"/>
+          <select id="aDecision">
+            <option value="">All decisions</option>
+            <option>ALLOW</option><option>WARN</option><option>CHALLENGE</option><option>BLOCK</option>
+          </select>
+          <input id="aMinRisk" type="number" min="0" max="100" placeholder="Min risk" style="width:104px"/>
+          <button class="btn-green" onclick="aOffset=0;loadAudit()">
+            <span data-ico="filter" class="i"></span>Apply</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Time</th><th>Decision</th><th>Risk</th><th>Amount</th>
+              <th>Reference</th><th>Reason</th><th>Hash chain</th></tr></thead>
+            <tbody id="auditRows"><tr><td colspan="8" class="empty">No audit records yet.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="pager">
+        <button class="btn-ghost" id="aPrev" onclick="aPage(-1)" disabled>
+          <span data-ico="chevron-left" class="i"></span>Previous</button>
+        <span id="aPageInfo">–</span>
+        <button class="btn-ghost" id="aNext" onclick="aPage(1)" disabled>
+          Next<span data-ico="chevron-right" class="i"></span></button>
+        <select id="aLimitSel" onchange="aLimit=+this.value;aOffset=0;loadAudit()"
+                style="margin-left:auto;background:var(--glass-strong);border:1px solid var(--hairline);
+                       border-radius:9px;padding:7px 10px;font-size:12px;font-family:inherit">
+          <option value="10">10 per page</option>
+          <option value="25">25 per page</option>
+          <option value="50">50 per page</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ INVESTMENTS ══ -->
+  <section id="tab-investments" style="display:none">
+    <div class="panel">
+      <div class="panel-head"><h2><span data-ico="trending-up" class="i-lg"></span>Investment History</h2></div>
+      <div class="panel-body">
+        <div class="filters">
+          <input id="iSearch" placeholder="Search fund…" style="flex:1;min-width:200px"/>
+          <select id="iDecision">
+            <option value="">All decisions</option>
+            <option>ALLOW</option><option>WARN</option><option>CHALLENGE</option><option>BLOCK</option>
+          </select>
+          <select id="iStatus">
+            <option value="">All statuses</option>
+            <option>SUCCESS</option><option>FAILED</option><option>PENDING</option>
+          </select>
+          <button class="btn-green" onclick="loadInvestments()">
+            <span data-ico="filter" class="i"></span>Apply</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Customer</th><th>Fund</th><th>Amount</th>
+              <th>Channel</th><th>Status</th><th>Decision</th></tr></thead>
+            <tbody id="invRows"><tr><td colspan="7" class="empty">No investments yet.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- ══ RED TEAM ══ -->
+  <section id="tab-redteam" style="display:none">
+    <div class="rt-banner">
+      <div class="ico"><span data-ico="swords" class="i-lg"></span></div>
+      <div>
+        <h3>Adversarial Resilience Console</h3>
+        <p>Attack this system on purpose. Every scenario below runs a <strong>real</strong>
+           attack against the live backend — direct database writes, live transactions,
+           live engine calls. Watch how the platform detects, responds and records it.
+           Results are written to the same immutable audit chain.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2><span data-ico="flask-conical" class="i-lg"></span>Attack Scenarios
+          <span class="hint" id="rtCount">click Run to execute against the live system</span></h2>
+        <button class="btn-ghost" onclick="loadScenarios()">
+          <span data-ico="refresh-cw" class="i"></span>Reload</button>
+      </div>
+      <div class="panel-body">
+        <div class="rt-grid" id="rtGrid">
+          <div class="empty"><span data-ico="loader"></span><div>Loading scenarios…</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast">
+  <div class="t-ico"><span data-ico="alert-triangle" class="i-lg"></span></div>
+  <div><div class="t-title" id="toastTitle"></div><div class="t-body" id="toastBody"></div></div>
+</div>
+
+<script>
+
+/* ── Inline icon set (Lucide-style paths, MIT). No CDN, works offline. ──── */
+const ICONS = {
+  'shield-check':'<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  'shield-x':'<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m14.5 9.5-5 5"/><path d="m9.5 9.5 5 5"/>',
+  'shield-alert':'<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  'shield-question':'<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  'shield-off':'<path d="m2 2 20 20"/><path d="M5 5a1 1 0 0 0-1 1v7c0 5 3.5 7.5 7.67 8.95a1 1 0 0 0 .67-.01c1.15-.4 2.25-.92 3.16-1.56"/><path d="M9.13 3.28A11 11 0 0 0 11.24 2.3a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1v7c0 .66-.06 1.28-.17 1.86"/>',
+  'check-circle-2':'<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  'alert-triangle':'<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  'alert-octagon':'<path d="M7.8 2h8.4L22 7.8v8.4L16.2 22H7.8L2 16.2V7.8z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  'ban':'<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  'siren':'<path d="M7 18v-6a5 5 0 1 1 10 0v6"/><path d="M5 21a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"/><path d="M21 12h1"/><path d="M18.5 4.5 18 5"/><path d="M2 12h1"/><path d="M12 2v1"/><path d="m4.929 4.929.707.707"/>',
+  'database':'<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+  'database-zap':'<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 9 3"/><path d="M3 12a9 3 0 0 0 9 3"/><path d="m19 10-3 5h4l-3 5"/>',
+  'gauge':'<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+  'landmark':'<line x1="3" x2="21" y1="22" y2="22"/><line x1="6" x2="6" y1="18" y2="11"/><line x1="10" x2="10" y1="18" y2="11"/><line x1="14" x2="14" y1="18" y2="11"/><line x1="18" x2="18" y1="18" y2="11"/><polygon points="12 2 20 7 4 7"/>',
+  'fingerprint':'<path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/>',
+  'scan-search':'<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/><path d="m16 16-1.9-1.9"/>',
+  'search':'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  'search-x':'<path d="m13.5 8.5-5 5"/><path d="m8.5 8.5 5 5"/><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  'loader':'<path d="M12 2v4"/><path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/><path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/><path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/><path d="m4.9 4.9 2.9 2.9"/>',
+  'refresh-cw':'<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  'lock-keyhole':'<circle cx="12" cy="16" r="1"/><rect x="3" y="10" width="18" height="12" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/>',
+  'radar':'<path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/>',
+  'wrench':'<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  'heart-pulse':'<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/>',
+  'layout-dashboard':'<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+  'scroll-text':'<path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/>',
+  'trending-up':'<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+  'plug-zap':'<path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"/><path d="m2 22 3-3"/><path d="M7.5 13.5 10 11"/><path d="M10.5 16.5 13 14"/><path d="m18 3-4 4h6l-4 4"/>',
+  'filter':'<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+  'chevron-left':'<path d="m15 18-6-6 6-6"/>',
+  'chevron-right':'<path d="m9 18 6-6-6-6"/>',
+  'arrow-up-right':'<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+  'arrow-down-right':'<path d="m7 7 10 10"/><path d="M17 7v10H7"/>',
+  'copy-x':'<path d="m14 8-4 4"/><path d="m10 8 4 4"/><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  'zap':'<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+  'help-circle':'<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  'message-square-warning':'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v2"/><path d="M12 13h.01"/>',
+  'key-round':'<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/>',
+  'swords':'<polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/><line x1="13" x2="19" y1="19" y2="13"/><line x1="16" x2="20" y1="16" y2="20"/><line x1="19" x2="21" y1="21" y2="19"/><polyline points="14.5 6.5 18 3 21 3 21 6 17.5 9.5"/><line x1="5" x2="9" y1="14" y2="18"/><line x1="7" x2="4" y1="17" y2="20"/><line x1="3" x2="5" y1="19" y2="21"/>',
+  'play':'<polygon points="6 3 20 12 6 21 6 3"/>',
+  'circle':'<circle cx="12" cy="12" r="10"/>',
+  'check':'<path d="M20 6 9 17l-5-5"/>',
+  'x':'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'info':'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  'crosshair':'<circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" y2="2"/><line x1="12" x2="12" y1="22" y2="18"/>',
+  'target':'<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  'flask-conical':'<path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"/><path d="M6.453 15h11.094"/><path d="M8.5 2h7"/>',
+};
+function icon(name, cls='i'){
+  const path = ICONS[name] || ICONS['circle'];
+  return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+}
+function hydrateIcons(root=document){
+  root.querySelectorAll('[data-ico]').forEach(el=>{
+    if(el.dataset.done) return;
+    el.outerHTML = icon(el.dataset.ico, el.className || 'i');
+  });
+}
+const refreshIcons = () => hydrateIcons();
+
+// Default to the same host the dashboard is served from (so opening it via a
+// LAN IP still finds the backend), falling back to localhost for file:// use.
+const DEFAULT_API = (location.protocol === 'file:' || !location.hostname)
+  ? 'http://localhost:8000'
+  : `${location.protocol}//${location.hostname}:8000`;
+let API = localStorage.getItem('swt_api') || DEFAULT_API;
+let KEY = localStorage.getItem('swt_key') || 'securewealth-admin-2026';
+let aOffset = 0, aLimit = 10, aTotal = 0;
+let lastAlertTime = null, pollTimer = null, seenDefence = 0;
+
+document.getElementById('apiUrl').value = API;
+document.getElementById('adminKey').value = KEY;
+
+const ICON = { ALLOW:'check-circle-2', WARN:'alert-triangle', CHALLENGE:'shield-question', BLOCK:'ban' };
+
+function hdrs(){ return { 'X-Admin-Key': KEY, 'Accept':'application/json' }; }
+async function get(path){
+  const r = await fetch(API + path, { headers: hdrs() });
+  if(!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}
+const fmtINR = n => '₹' + Number(n||0).toLocaleString('en-IN');
+const fmtTime = iso => iso ? new Date(iso).toLocaleString('en-IN',{hour12:true}) : '—';
+const short = (s,n=10) => s ? String(s).slice(0,n)+'…' : '—';
+const riskColor = r => r>=75?'var(--block)':r>=50?'var(--challenge)':r>=25?'var(--warn)':'var(--allow)';
+
+function riskCell(score){
+  const s = Number(score)||0;
+  return `<div class="risk"><span class="risk-num" style="color:${riskColor(s)}">${s}</span>
+    <div class="risk-bar"><div class="risk-fill" style="width:${s}%;background:${riskColor(s)}"></div></div></div>`;
+}
+const pill = d => `<span class="pill ${d}">${icon(ICON[d]||'circle')}${d}</span>`;
+
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
+  ['overview','audit','investments','redteam'].forEach(t=>
+    document.getElementById('tab-'+t).style.display = (t===name?'':'none'));
+  if(name==='audit') loadAudit();
+  if(name==='investments') loadInvestments();
+  if(name==='redteam') loadScenarios();
+}
+
+/* ── Red Team console ─────────────────────────────────────────────────────── */
+let SCENARIOS = [];
+
+async function loadScenarios(){
+  const grid = document.getElementById('rtGrid');
+  try{
+    const r = await get('/api/v1/admin/redteam/scenarios');
+    SCENARIOS = r.scenarios || [];
+    if(!r.enabled){
+      grid.innerHTML = `<div class="empty">${icon('shield-off')}
+        <div>Red Team console is disabled on this server.</div></div>`;
+      refreshIcons(); return;
+    }
+    document.getElementById('rtCount').textContent =
+      `${SCENARIOS.length} scenarios · run one at a time · results are audited`;
+    grid.innerHTML = SCENARIOS.map(sc=>`
+      <div class="rt-card" id="rt-${sc.id}">
+        <div class="rt-top">
+          <div class="rt-ico ${sc.severity==='info'?'info':''}">${icon(sc.icon,'i-lg')}</div>
+          <div style="flex:1;min-width:0">
+            <div class="rt-name">${sc.name}</div>
+            <div class="rt-cat">${sc.category}</div>
+          </div>
+          <span class="sev ${sc.severity}">${sc.severity.toUpperCase()}</span>
+        </div>
+        <div class="rt-desc">${sc.description}</div>
+        <div class="rt-exp">${icon('target')}<span>${sc.expected}</span></div>
+        <div class="rt-actions">
+          <button class="btn-green" id="btn-${sc.id}" onclick="runScenario('${sc.id}')">
+            ${icon('play')}Run attack</button>
+        </div>
+        <div class="rt-result" id="res-${sc.id}" style="display:none"></div>
+      </div>`).join('');
+    refreshIcons();
+  }catch(e){
+    grid.innerHTML = `<div class="empty">${icon('shield-x')}
+      <div>Could not load scenarios: ${e.message}</div></div>`;
+    refreshIcons();
+  }
+}
+
+let rtRunning = false;
+
+function setRunButtons(disabled, exceptId){
+  SCENARIOS.forEach(sc=>{
+    const b = document.getElementById('btn-'+sc.id);
+    if(b && sc.id !== exceptId) b.disabled = disabled;
+  });
+}
+
+async function runScenario(id){
+  if(rtRunning){
+    toast('One at a time', 'A scenario is already running — attacks are run one '
+      + 'after another so their results stay clean.');
+    return;
+  }
+  rtRunning = true;
+  setRunButtons(true, id);
+
+  const card = document.getElementById('rt-'+id);
+  const btn  = document.getElementById('btn-'+id);
+  const res  = document.getElementById('res-'+id);
+  card.classList.remove('DEFENDED','BREACHED'); card.classList.add('running');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Running…';
+  res.style.display='block';
+  res.innerHTML = `<div class="rt-summary">Executing against the live system…</div>`;
+
+  try{
+    const r = await fetch(API+`/api/v1/admin/redteam/run/${id}`,
+      {method:'POST', headers:hdrs()});
+    if(!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    const out = await r.json();
+
+    card.classList.remove('running');
+    card.classList.add(out.outcome === 'DEFENDED' ? 'DEFENDED' : 'BREACHED');
+
+    const vIcon = out.outcome==='DEFENDED' ? 'shield-check'
+                : out.outcome==='BREACHED' ? 'shield-x' : 'alert-triangle';
+    res.innerHTML = `
+      <div class="rt-verdict ${out.outcome}">${icon(vIcon,'i-lg')}
+        ${out.outcome === 'DEFENDED' ? 'ATTACK DEFENDED'
+          : out.outcome === 'BREACHED' ? 'BREACH — REVIEW REQUIRED' : 'SCENARIO ERROR'}
+        <span style="margin-left:auto;font-weight:500;color:var(--ink-3);font-size:11px">
+          ${out.duration_ms} ms</span></div>
+      <div class="rt-summary">${out.summary}</div>
+      <ul class="tl">${(out.steps||[]).map(st=>`
+        <li class="${st.status}"><b>${st.label}</b>${st.detail}</li>`).join('')}</ul>`;
+    refreshIcons();
+
+    if(out.outcome === 'BREACHED'){
+      shakeScreen();
+      toast('Breach detected', `${out.name}: the attack was not fully contained.`);
+    }
+    // Attacks change system state — refresh the live panels immediately.
+    loadStats(); loadSecurityEvents(); pollAlerts();
+  }catch(e){
+    card.classList.remove('running'); card.classList.add('BREACHED');
+    res.innerHTML = `<div class="rt-verdict ERROR">${icon('alert-triangle','i-lg')}
+      COULD NOT RUN</div><div class="rt-summary">${e.message}</div>`;
+    refreshIcons();
+  }finally{
+    rtRunning = false;
+    setRunButtons(false);
+    btn.disabled = false;
+    btn.innerHTML = icon('play')+'Run attack';
+    refreshIcons();
+  }
+}
+
+async function connect(){
+  API = document.getElementById('apiUrl').value.replace(/\/$/,'');
+  KEY = document.getElementById('adminKey').value;
+  localStorage.setItem('swt_api',API); localStorage.setItem('swt_key',KEY);
+  try{
+    await loadStats();
+    document.getElementById('connDot').classList.add('ok');
+    document.getElementById('connText').textContent = 'Live';
+    startPolling();
+    document.getElementById('connHelp').style.display = 'none';
+  }catch(e){
+    document.getElementById('connDot').classList.remove('ok');
+    document.getElementById('connText').textContent = 'Offline';
+    const help = document.getElementById('connHelp');
+    help.style.display = 'flex';
+    document.getElementById('connHelpText').innerHTML =
+      `Could not reach <b>${API}</b> — ${e.message}<br>` +
+      `Start the backend with <code>uvicorn main:app --reload --host 0.0.0.0 --port 8000</code>, ` +
+      `check the API URL above, and confirm the admin key matches <code>ADMIN_API_KEY</code>.`;
+  }
+}
+
+let lastAuditCount = -1;
+
+async function loadStats(){
+  const s = await get('/api/v1/admin/stats'); const d = s.decisions;
+  // The defence feed only changes when new audit records appear, so refetch it
+  // on change rather than on every 5-second tick.
+  if(s.total_audit_records !== lastAuditCount){
+    lastAuditCount = s.total_audit_records;
+    loadSecurityEvents();
+  }
+  const total = s.total_audit_records||0;
+  const pct = n => total ? Math.round(n/total*100)+'% of all decisions' : '—';
+  const card = (cls,label,ic,value,foot)=>`
+    <div class="card ${cls}"><div class="top"><div class="label">${label}</div>
+      <div class="ico">${icon(ic,'i-lg')}</div></div>
+      <div class="value">${value}</div><div class="foot">${foot}</div></div>`;
+  document.getElementById('statCards').innerHTML =
+      card('','Audit records','database',total,`${s.audits_last_24h} in the last 24h`)
+    + card('allow','Approved','check-circle-2',d.ALLOW,pct(d.ALLOW))
+    + card('warn','Warned','alert-triangle',d.WARN,pct(d.WARN))
+    + card('challenge','Challenged','shield-question',d.CHALLENGE,pct(d.CHALLENGE))
+    + card('block','Blocked','ban',d.BLOCK,pct(d.BLOCK))
+    + card('','Avg risk score','gauge',s.average_risk_score,'across all decisions')
+    + card('block','Fraud stopped','shield-x',fmtINR(s.blocked_amount),'customer money protected')
+    + card('wealth','Total invested','landmark',fmtINR(s.total_invested_amount),'successfully settled');
+  refreshIcons();
+}
+
+async function checkIntegrity(){
+  const box=document.getElementById('integrityBox'), seal=document.getElementById('integritySeal');
+  const st=document.getElementById('integrityStatus'), det=document.getElementById('integrityDetail');
+  box.classList.add('checking'); box.classList.remove('bad');
+  seal.innerHTML = icon('loader','i-xl'); refreshIcons();
+  st.textContent='Verifying…'; det.textContent='Re-hashing the chain and checking every signature.';
+  try{
+    const r = await get('/api/v1/audit/integrity');
+    const ok = r.hash_chain_valid && r.signatures_invalid === 0;
+    box.classList.remove('checking'); box.classList.toggle('bad',!ok);
+    seal.innerHTML = icon(ok?'shield-check':'shield-x','i-xl'); refreshIcons();
+    st.textContent = ok ? 'CHAIN INTACT — no tampering detected' : 'TAMPERING DETECTED';
+    det.textContent =
+      `${r.overall_status} · ${r.checked_records} records verified · ` +
+      `${r.signatures_valid} signatures valid, ${r.signatures_invalid} invalid` +
+      (r.replicas_valid!=null ? ` · ${r.replicas_valid} replicas consistent` : '') +
+      (r.recoveries_succeeded ? ` · ${r.recoveries_succeeded} auto-repaired` : '');
+    if(!ok) shakeScreen();
+    loadSecurityEvents();
+  }catch(e){
+    box.classList.remove('checking'); box.classList.add('bad');
+    seal.innerHTML = icon('shield-x','i-xl'); refreshIcons();
+    st.textContent='Verification failed'; det.textContent=e.message;
+  }
+}
+
+async function loadSecurityEvents(){
+  try{
+    const r = await get('/api/v1/admin/security-events');
+    const feed = document.getElementById('defenceFeed');
+    if(!r.events.length){
+      feed.innerHTML = `<div class="empty">${icon('lock-keyhole')}
+        <div>No tampering detected. The audit chain has never been altered.</div></div>`;
+      refreshIcons(); return;
+    }
+    if(r.events.length > seenDefence && seenDefence > 0) shakeScreen();
+    seenDefence = r.events.length;
+    feed.innerHTML = r.events.map(e=>{
+      const healed = e.event_type === 'RECOVERY_EVENT';
+      return `<div class="feed-item ${healed?'HEAL':'TAMPER'}">
+        <div class="feed-ico" style="background:var(--${healed?'challenge':'block'}-bg);
+             color:var(--${healed?'challenge':'block'})">
+          ${icon(healed?'wrench':'shield-alert','i-lg')}</div>
+        <div class="feed-body">
+          <div class="feed-title"><span class="pill ${healed?'CHALLENGE':'BLOCK'}">
+            ${icon(healed?'heart-pulse':'alert-octagon')}${healed?'SELF-HEALED':'TAMPER DETECTED'}</span></div>
+          <div class="feed-meta">${e.audit_note || 'Audit integrity event'}</div>
+        </div>
+        <div class="feed-time">${fmtTime(e.created_at)}</div></div>`;
+    }).join('');
+    refreshIcons();
+  }catch(e){}
+}
+
+async function pollAlerts(){
+  try{
+    const q = lastAlertTime ? `?since=${encodeURIComponent(lastAlertTime)}` : '?limit=15';
+    const r = await get('/api/v1/admin/alerts'+q);
+    const feed = document.getElementById('alertFeed');
+    if(r.alerts.length){
+      const newest = r.alerts[0];
+      if(lastAlertTime){
+        toast(`${newest.final_decision} — ${fmtINR(newest.amount)}`,
+          `Risk score ${newest.risk_score}. ${newest.audit_note || 'Recorded in the immutable audit chain.'}`);
+        shakeScreen();
+      }
+      if(feed.querySelector('.empty')) feed.innerHTML='';
+      for(const a of r.alerts.slice().reverse()){
+        const div=document.createElement('div');
+        div.className='feed-item '+a.final_decision+(lastAlertTime?' fresh':'');
+        div.innerHTML=`
+          <div class="feed-ico" style="background:var(--${a.final_decision.toLowerCase()}-bg);
+               color:var(--${a.final_decision.toLowerCase()})">
+            ${icon(ICON[a.final_decision]||'siren','i-lg')}</div>
+          <div class="feed-body">
+            <div class="feed-title">${pill(a.final_decision)}
+              <span class="amount">${fmtINR(a.amount)}</span></div>
+            <div class="feed-meta">Risk ${a.risk_score} · ref ${short(a.transaction_id,8)} ·
+              ${a.audit_note || 'Decision recorded'}</div>
+          </div>
+          <div class="feed-time">${fmtTime(a.created_at)}</div>`;
+        feed.prepend(div);
+      }
+      while(feed.children.length>25) feed.removeChild(feed.lastChild);
+      refreshIcons();
+    }
+    lastAlertTime = r.server_time;
+    loadStats();
+  }catch(e){}
+}
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollAlerts(); pollTimer = setInterval(pollAlerts, 5000);
+}
+
+async function loadAudit(){
+  const p = new URLSearchParams({limit:aLimit, offset:aOffset});
+  const s=document.getElementById('aSearch').value.trim();
+  const d=document.getElementById('aDecision').value;
+  const m=document.getElementById('aMinRisk').value;
+  if(s)p.set('search',s); if(d)p.set('decision',d); if(m)p.set('min_risk',m);
+  try{
+    const r = await get('/api/v1/admin/audit?'+p);
+    aTotal = r.total;
+    document.getElementById('auditRows').innerHTML = r.records.map(a=>`
+      <tr><td style="color:var(--ink-3);font-weight:750">${a.chain_index ?? '—'}</td>
+        <td>${fmtTime(a.created_at)}</td>
+        <td>${pill(a.final_decision)}</td>
+        <td>${riskCell(a.risk_score)}</td>
+        <td class="amount">${fmtINR(a.amount)}</td>
+        <td class="chain">txn ${short(a.transaction_id,8)}<br>cust ${short(a.user_id,8)}</td>
+        <td style="max-width:250px;color:var(--ink-2)">${a.audit_note || '—'}</td>
+        <td class="chain">
+          <div class="chain-link">${icon('arrow-up-right')}<b>${short(a.previous_hash,12)}</b></div>
+          <div class="chain-link">${icon('arrow-down-right')}<b>${short(a.current_hash,12)}</b></div>
+        </td></tr>`).join('')
+      || `<tr><td colspan="8" class="empty">${icon('search-x')}<div>No records match these filters.</div></td></tr>`;
+    const from = aTotal===0 ? 0 : aOffset+1;
+    const to   = Math.min(aOffset+aLimit, aTotal);
+    const page = aTotal===0 ? 1 : Math.floor(aOffset/aLimit)+1;
+    const pages= Math.max(1, Math.ceil(aTotal/aLimit));
+    document.getElementById('aPageInfo').textContent =
+      `Showing ${from}–${to} of ${aTotal}  ·  page ${page} of ${pages}`;
+    // Disable the arrows at the ends so the control reflects reality.
+    document.getElementById('aPrev').disabled = aOffset <= 0;
+    document.getElementById('aNext').disabled = aOffset + aLimit >= aTotal;
+    refreshIcons();
+  }catch(e){ alert('Audit load failed: '+e.message); }
+}
+function aPage(dir){
+  const next = aOffset + dir*aLimit;
+  if(next < 0 || next >= aTotal) return;   // already at an end
+  aOffset = next;
+  loadAudit();
+  document.getElementById('tab-audit').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+async function loadInvestments(){
+  const p = new URLSearchParams({limit:50});
+  const s=document.getElementById('iSearch').value.trim();
+  const d=document.getElementById('iDecision').value;
+  const st=document.getElementById('iStatus').value;
+  if(s)p.set('search',s); if(d)p.set('decision',d); if(st)p.set('status',st);
+  try{
+    const r = await get('/api/v1/admin/investments?'+p);
+    document.getElementById('invRows').innerHTML = r.investments.map(t=>`
+      <tr><td>${fmtTime(t.transaction_time)}</td>
+        <td><strong>${t.customer_name}</strong><br><span class="chain">${t.customer_id||''}</span></td>
+        <td>${t.fund_name}<br><span class="chain">${t.fund_category}</span></td>
+        <td class="amount">${fmtINR(t.amount)}</td>
+        <td>${t.channel}</td>
+        <td><span class="pill ${t.status}">${t.status}</span></td>
+        <td>${t.decision ? pill(t.decision) : '—'}</td></tr>`).join('')
+      || `<tr><td colspan="7" class="empty">${icon('search-x')}<div>No investments match these filters.</div></td></tr>`;
+    refreshIcons();
+  }catch(e){ alert('Investments load failed: '+e.message); }
+}
+
+function shakeScreen(){
+  document.body.classList.remove('alerting');
+  void document.body.offsetWidth;          // restart the animation
+  document.body.classList.add('alerting');
+  setTimeout(()=>document.body.classList.remove('alerting'), 1100);
+}
+
+function toast(title, body){
+  const t=document.getElementById('toast');
+  document.getElementById('toastTitle').textContent = title;
+  document.getElementById('toastBody').textContent = body;
+  t.classList.add('show'); refreshIcons();
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=>t.classList.remove('show'), 6500);
+}
+
+refreshIcons();
+connect();
+</script>
+</body>
+</html>

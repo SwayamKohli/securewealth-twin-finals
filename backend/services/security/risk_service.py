@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 
@@ -5,6 +6,9 @@ from models.user import User
 from schemas.security.risk_schema import RiskEvaluationInput, RiskEvaluationOutput
 from security.risk_engine import evaluate_risk, RiskEvaluationInput as EngineRiskInput, EnvironmentInput as EngineEnvInput
 from security.behavior_engine import BehaviorEngine, BehaviorInput as BehInput, BehaviorSignals
+
+
+logger = logging.getLogger(__name__)
 
 
 class RiskService:
@@ -59,5 +63,5 @@ class RiskService:
             )
             
         except Exception as e:
-            print(f"Error in risk evaluation: {str(e)}")
+            logger.exception("Error in risk evaluation")
             raise

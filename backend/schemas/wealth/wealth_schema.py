@@ -44,6 +44,13 @@ class WealthRequest(BaseModel):
     fraud_probability: float = Field(0.0, ge=0.0, le=1.0, description="Fraud probability score")
 
 
+class WealthPosition(BaseModel):
+    """Task 3.2 — Assets, Liabilities and Net Worth surfaced to the frontend."""
+    total_assets: float = Field(..., description="Total assets (INR)")
+    total_liabilities: float = Field(..., description="Total liabilities (INR)")
+    net_worth: float = Field(..., description="Assets minus liabilities (INR)")
+
+
 class WealthResponse(BaseModel):
     suppressed: bool = Field(..., description="Whether advice is suppressed")
     suppress_reason: Optional[str] = Field(None, description="Reason for suppression")
@@ -51,4 +58,5 @@ class WealthResponse(BaseModel):
     financial_health: FinancialHealth = Field(..., description="Financial health metrics")
     recommendations: List[Recommendation] = Field(..., description="List of recommendations")
     goal_summaries: List[GoalSummary] = Field(..., description="Goal progress summaries")
+    wealth_position: Optional[WealthPosition] = Field(None, description="Assets / Liabilities / Net Worth")
     disclaimer: str = Field(..., description="Legal disclaimer")

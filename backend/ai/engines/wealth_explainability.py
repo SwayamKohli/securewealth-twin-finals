@@ -20,7 +20,7 @@ _OLLAMA_URL     = "http://localhost:11434/api/generate"
 _DEFAULT_MODEL  = "llama3:latest"
 
 # HTTP timeout — keep short so a slow/absent LLM doesn't block the API response
-_TIMEOUT_SECS   = 10
+_TIMEOUT_SECS   = 45   # cold model load can take 15-40s; see llm_source
 
 # Maximum characters accepted from LLM before we reject as hallucination
 _MAX_LLM_OUTPUT = 600
@@ -168,6 +168,7 @@ class RecommendationExplainer:
             "model":  self._model,
             "prompt": prompt,
             "stream": False,
+            "keep_alive": "30m",
             "options": {
                 "temperature": 0.1,
                 "top_p": 0.9

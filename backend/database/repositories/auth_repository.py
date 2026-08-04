@@ -21,6 +21,18 @@ class AuthRepository:
     # USER
     # ----------------------------
 
+    def get_user_by_customer_id(
+        self,
+        customer_id: str,
+    ) -> User | None:
+
+        statement = (
+            select(User)
+            .where(User.customer_id == customer_id.upper())
+        )
+
+        return self.db.execute(statement).scalar_one_or_none()
+
     def get_user_by_phone(
         self,
         phone: str,

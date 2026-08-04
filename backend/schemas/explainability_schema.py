@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional
 
 class PhishingExplanationRequest(BaseModel):
     scan_result: Dict[str, Any] = Field(..., description="Phishing scan result to explain")
+    language: str = Field("en", description="Output language: en | hi | pa")
 
 
 class PhishingExplanationResponse(BaseModel):
@@ -15,6 +16,7 @@ class PhishingExplanationResponse(BaseModel):
 
 class ChallengeExplanationRequest(BaseModel):
     requirement: Dict[str, Any] = Field(..., description="Challenge requirement to explain")
+    language: str = Field("en", description="Output language: en | hi | pa")
     ollama_url: Optional[str] = Field(None, description="Custom Ollama URL if using local LLM")
 
 
@@ -25,11 +27,13 @@ class ChallengeExplanationResponse(BaseModel):
 
 class DecisionExplanationRequest(BaseModel):
     record: Dict[str, Any] = Field(..., description="Decision record to explain")
+    language: str = Field("en", description="Output language: en | hi | pa")
     ollama_url: Optional[str] = Field(None, description="Custom Ollama URL if using local LLM")
 
 
 class DecisionExplanationResponse(BaseModel):
     explanation: str = Field(..., description="Explanation of transaction decision")
+    source: str = Field("template", description="llm = local model answered; template = deterministic fallback")
 
 
 class DeviceTrustExplanationRequest(BaseModel):
@@ -52,6 +56,7 @@ class RiskExplanationRequest(BaseModel):
 
 class RiskExplanationResponse(BaseModel):
     explanation: str = Field(..., description="Explanation of risk evaluation")
+    source: str = Field("template", description="llm = local model answered; template = deterministic fallback")
 
 
 class UnknownRiskExplanationRequest(BaseModel):
@@ -61,6 +66,7 @@ class UnknownRiskExplanationRequest(BaseModel):
 
 class UnknownRiskExplanationResponse(BaseModel):
     explanation: str = Field(..., description="Explanation of unknown risk decision")
+    source: str = Field("template", description="llm = local model answered; template = deterministic fallback")
 
 
 class WealthExplanationRequest(BaseModel):

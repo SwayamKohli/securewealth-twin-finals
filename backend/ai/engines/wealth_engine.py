@@ -22,8 +22,6 @@ Pipeline design: pure rule-based. No ML, no LLM inside this engine.
 Security contract:
   - This engine does NOT decide to allow or block any transaction.
   - It SUPPRESSES wealth advice when fraud_probability > 0.70.
-  "Investment recommendations are temporarily withheld while the Security Layer reviews potentially compromised account activity. 
-  Goal summaries and financial health remain visible because they are informational and do not trigger financial actions."
   - All amounts are INR. All figures are simulation estimates, not guarantees.
 
 Sources:
@@ -42,10 +40,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from .account_analyzer   import analyze_accounts
-from .cashflow_analyzer  import analyze_cashflow
-from .liability_analyzer import analyze_liabilities
-from .goal_analyzer      import analyze_goals
 
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -97,6 +91,30 @@ RISK_EQUITY_MODIFIER = {
     "moderate":     1.00,    # no change
     "aggressive":   1.30,    # raise by 30%, capped at 1.0
 }
+
+# ── 3.1 Monthly Expense Integration ───────────────────────────────────────────
+# Expense-to-income ratio above this is "high" and worth surfacing to the user
+# even when a surplus exists. Complements the 50/30/20 rule.  [source: [13]]
+HIGH_EXPENSE_RATIO = 0.70
+
+# ── 3.3 Mutual Fund Only — approved product whitelist ─────────────────────────
+# Every recommendation the engine emits MUST use one of these product categories.
+# Deposit products (FD/RD), mutual-fund CATEGORIES only (never a scheme name),
+# debt prepayment, and budgeting guidance. Stocks, specific fund names, intraday,
+# and guaranteed-return products are structurally impossible to emit.
+# Enforced by _assert_products_approved() before every return.  [source: PSB FINALS.md §8]
+APPROVED_PRODUCTS = frozenset([
+    "Liquid Fixed Deposit",
+    "Fixed Deposit",
+    "Fixed Deposit Renewal",
+    "Recurring Deposit",
+    "Debt Mutual Fund (SIP)",
+    "Equity Mutual Fund (SIP)",
+    "Balanced Mutual Fund (SIP)",
+    "ELSS Mutual Fund (SIP) — 3-year lock-in",
+    "Recurring Deposit / Direct Prepayment",
+    "Budgeting Review",
+])
 
 # Legal disclaimer — must appear on every non-suppressed response  [source: PSB FINALS.md §8]
 DISCLAIMER = (
@@ -158,24 +176,27 @@ class WealthIntelligenceEngine:
         """
         user_id = profile.get("user_id", "UNKNOWN")
 
-        # Always compute goal summaries and health — these are informational,
-        # not suppressed by the fraud gate (user still needs to see their goals).
-        goal_summaries  = self._build_goal_summaries(profile)
+        # Always compute goal summaries, health, and wealth position — these are
+        # informational, not suppressed by the fraud gate (user still needs to
+        # see their goals and net worth even during a security review).
+        goal_summaries   = self._build_goal_summaries(profile)
         financial_health = self._compute_financial_health(profile)
+        wealth_position  = self._build_wealth_position(profile)   # 3.2
 
         # ── Security Gate ──────────────────────────────────────────────────────
         # Design directive — suppress investment advice during
         # active security review. The user can still see their goal progress.
         if fraud_probability > FRAUD_RISK_GATE:
-            return {
+            return self._finalize({
                 "suppressed":      True,
                 "suppress_reason": "high_fraud_risk",
                 "user_id":         user_id,
                 "financial_health": financial_health,
+                "wealth_position": wealth_position,
                 "recommendations": [],
                 "goal_summaries":  goal_summaries,
                 "disclaimer":      DISCLAIMER,
-            }
+            })
 
         # ── Layer 1: Financial Position ────────────────────────────────────────
         # Source: [8] Can the user invest at all?
@@ -183,25 +204,27 @@ class WealthIntelligenceEngine:
         surplus = profile.get("investable_surplus", 0.0)
         if surplus <= 0:
             expense_rec = self._expense_optimization(profile)
-            return {
+            return self._finalize({
                 "suppressed":      True,
                 "suppress_reason": "no_investable_surplus",
                 "user_id":         user_id,
                 "financial_health": financial_health,
+                "wealth_position": wealth_position,
                 "recommendations": [expense_rec] if expense_rec else [],
                 "goal_summaries":  goal_summaries,
                 "disclaimer":      DISCLAIMER,
-            }
+            })
 
         # ── Layer 2: Debt Burden ───────────────────────────────────────────────
         # Source: [11] RBI norms — DTI > 50% = stressed, no growth investing.
         dti = profile.get("debt_ratio", 0.0)
         if dti > DTI_STRESSED:
             debt_rec = self._debt_reduction(profile)
-            return {
+            return self._finalize({
                 "suppressed":      False,
                 "user_id":         user_id,
                 "financial_health": financial_health,
+                "wealth_position": wealth_position,
                 "recommendations": [debt_rec] if debt_rec else [],
                 "goal_summaries":  goal_summaries,
                 "disclaimer":      DISCLAIMER,
@@ -210,7 +233,7 @@ class WealthIntelligenceEngine:
                     "priority_action": "debt_reduction",
                     "dti_pct": round(dti * 100, 1),
                 },
-            }
+            })
 
         # ── Layer 3: Emergency Readiness ───────────────────────────────────────
         # Source: [8] Build 4-month runway before growth investing.
@@ -218,6 +241,12 @@ class WealthIntelligenceEngine:
         months_of_runway = profile.get("months_of_runway", 0.0)
         emergency_gap    = profile.get("emergency_fund_gap", 0.0)
         has_ef_goal      = profile.get("has_emergency_fund_goal", False)
+
+        # ── 3.1 Monthly Expense Integration ────────────────────────────────────
+        # Derive an expense-ratio signal used to personalise recommendation text.
+        # High expenses (even with a surplus) mean SIP capacity is being throttled
+        # by discretionary spend — we surface that in the SIP/goal reasons below.
+        expense_ctx = self._expense_context(profile)
 
         if months_of_runway < EMERGENCY_FUND_MONTHS and not has_ef_goal:
             # No explicit emergency fund goal — add an implicit one
@@ -279,14 +308,20 @@ class WealthIntelligenceEngine:
         # Deduplicate by recommendation_id (Layer 3 and Goal Layer may both suggest EF)
         recs = _deduplicate(recs)
 
-        return {
+        # ── 3.1 Monthly Expense Integration ────────────────────────────────────
+        # Weave expense context into SIP/investment recommendation reasons.
+        if expense_ctx["high_expense"]:
+            recs = self._apply_expense_personalization(recs, expense_ctx)
+
+        return self._finalize({
             "suppressed":       False,
             "user_id":          user_id,
             "financial_health": financial_health,
+            "wealth_position":  wealth_position,
             "recommendations":  recs,
             "goal_summaries":   goal_summaries,
             "disclaimer":       DISCLAIMER,
-        }
+        })
 
     # ── Layer helpers ──────────────────────────────────────────────────────────
 
@@ -393,7 +428,10 @@ class WealthIntelligenceEngine:
                 "recommendation_id": f"fd_reinvest_{entry.get('deposit_id', 'unknown')}",
                 "recommendation":    f"{dep_type} Reinvestment Alert",
                 "product":           "Fixed Deposit Renewal",
-                "amount":            principal,
+                # int-cast: principal arrives from the AA feed and may be a float
+                # (e.g. 100000.0). The frontend contract pins amount to int, so we
+                # normalise here rather than leak a float. See _finalize() guard.
+                "amount":            int(round(principal)),
                 "tenure":            f"Maturing in {days} days",
                 "reason": (
                     f"Your {_fmt_inr(principal)} {dep_type} at {rate}% matures in {days} days. "
@@ -813,8 +851,113 @@ class WealthIntelligenceEngine:
             })
         return summaries
 
+    # ── 3.2 Net Worth exposure ─────────────────────────────────────────────────
+
+    def _build_wealth_position(self, profile: dict) -> dict:
+        """
+        Expose Assets ↓ Liabilities ↓ Net Worth to the frontend output.
+
+        All three figures are already computed by FinancialProfileBuilder; this
+        surfaces them in the wealth engine output so the frontend does not need
+        to reach back into the raw profile. Always present, on every path
+        (including fraud-suppressed), like goal_summaries and financial_health.
+        """
+        total_assets      = float(profile.get("total_assets", 0.0))
+        total_liabilities = float(profile.get("total_liabilities", 0.0))
+        net_worth         = float(profile.get("net_worth", total_assets - total_liabilities))
+        return {
+            "total_assets":      round(total_assets, 2),
+            "total_liabilities": round(total_liabilities, 2),
+            "net_worth":         round(net_worth, 2),
+        }
+
+    # ── 3.1 Monthly Expense Integration ────────────────────────────────────────
+
+    def _expense_context(self, profile: dict) -> dict:
+        """
+        Derive an expense-to-income signal used to personalise advice.
+
+        Returns a small context dict:
+            expense_ratio  float  monthly_expenses / monthly_income (0.0 if no income)
+            high_expense   bool   True when expense_ratio > HIGH_EXPENSE_RATIO
+            wants_pct      float  discretionary spend as a fraction of income
+        """
+        income   = profile.get("monthly_income", 0.0) or 0.0
+        expenses = profile.get("monthly_expenses", 0.0) or 0.0
+        ratio    = (expenses / income) if income > 0 else 0.0
+        wants    = profile.get("spending_breakdown", {}).get("wants", 0.0)
+        return {
+            "expense_ratio": round(ratio, 3),
+            "high_expense":  ratio > HIGH_EXPENSE_RATIO,
+            "wants_pct":     wants,
+        }
+
+    def _apply_expense_personalization(self, recs: list[dict], ctx: dict) -> list[dict]:
+        """
+        Append an expense-awareness sentence to SIP / investment recommendation
+        reasons when the user's expense ratio is high. Amounts and IDs are left
+        untouched (so existing explainer templates stay valid) — only the free-text
+        'reason' is enriched for more personalised advice.
+        """
+        pct = ctx["expense_ratio"] * 100
+        note = (
+            f" Note: your monthly expenses are {pct:.0f}% of income. "
+            "Trimming discretionary spending would free up more surplus to raise "
+            "this contribution."
+        )
+        for rec in recs:
+            # Only enrich growth/SIP recommendations — not debt or emergency-fund recs.
+            if "SIP" in rec.get("product", "") or rec.get("recommendation_id", "").endswith("_sip"):
+                rec["reason"] = rec.get("reason", "") + note
+        return recs
+
+    # ── 3.3 Mutual Fund Only — product guard ───────────────────────────────────
+
+    def _finalize(self, result: dict) -> dict:
+        """
+        Final gate applied to every return path: assert every emitted product is
+        on the APPROVED_PRODUCTS whitelist before the result leaves the engine.
+        This structurally guarantees no stock pick / specific fund name / non-MF
+        growth product can ever ship, even after future edits.
+
+        Also enforces the frontend data-type contract: recommendation `amount` is
+        pinned to `int` in schemas.py. Any recommendation whose amount arrives as a
+        float (e.g. an FD principal fed through from the AA layer as 100000.0) is
+        coerced to int here so the JSON sent to the frontend never mixes int/float
+        for the same field. Pydantic's lax mode would hide this — the frontend
+        would not.
+        """
+        recs = result.get("recommendations", [])
+        for rec in recs:
+            amt = rec.get("amount")
+            if isinstance(amt, float):
+                rec["amount"] = int(round(amt))
+        _assert_products_approved(recs)
+        return result
+
 
 # ─── Private helpers ──────────────────────────────────────────────────
+
+def _assert_products_approved(recs: list[dict]) -> None:
+    """
+    3.3 Mutual Fund Only guard. Raise if any recommendation uses a product
+    outside the approved whitelist. Loan prepayment products are dynamic
+    (e.g. "Personal Loan Prepayment"), so a "... Loan Prepayment" suffix is
+    accepted in addition to exact whitelist membership.
+    """
+    for rec in recs:
+        product = rec.get("product", "")
+        if product in APPROVED_PRODUCTS:
+            continue
+        if product.endswith("Loan Prepayment"):
+            continue
+        raise ValueError(
+            f"Disallowed product '{product}' in recommendation "
+            f"'{rec.get('recommendation_id', '?')}' — not in APPROVED_PRODUCTS. "
+            "Wealth engine is restricted to deposits, mutual-fund categories, "
+            "loan prepayment, and budgeting guidance (no stocks / fund names)."
+        )
+
 
 def _round_to_hundred(amount: float) -> int:
     """Round to nearest ₹100 for clean recommendations."""

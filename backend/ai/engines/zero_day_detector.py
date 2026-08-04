@@ -32,13 +32,51 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from ai.utils.feature_engineering import FEATURE_COLS, FraudFeatureEngineer
+# CRITICAL: use the SAME adapter as the XGBoost path, not
+# ai.utils.feature_engineering.
+#
+# feature_engineering.FEATURE_COLS is this repo's own 22-feature set
+# (day_sin, velocity_1h, device_trust_score, …). The autoencoder was trained in
+# the original ai_new layout against a DIFFERENT 22 features (amount,
+# amount_z_score, otp_time_sec, burst_flag, …). Only 4 names overlap, and none
+# of those share a position.
+#
+# Feeding the wrong vector means ae_scaler applies `amount`'s mean and std to
+# whatever sits in that slot at runtime — velocity_1h — and so on for all 22.
+# Reconstruction error came out ~5,000x the p99 threshold, so EVERY
+# transaction, including an ordinary ₹4,000 SIP, was classified UNKNOWN_RISK
+# and escalated to CHALLENGE. The model was loaded and completely misinformed.
+#
+# LEGACY_FEATURE_COLS is byte-identical to ae_thresholds.json["feature_cols"],
+# in the same order, which is exactly the contract the model was trained on.
+from ai.utils.legacy_feature_adapter import (
+    LEGACY_FEATURE_COLS as FEATURE_COLS,
+    LegacyFeatureAdapter,
+)
 
 # ─── Default artifact paths ────────────────────────────────────────────────────
 _MODELS_DIR = Path(__file__).parent / "models"
 
 
 # ─── Autoencoder Architecture ─────────────────────────────────────────────────
+
+def _register_legacy_module_alias() -> None:
+    """
+    Make `ai_new.zero_day_detector` resolve to this module.
+
+    Only needed while loading artifacts trained in the original `ai_new`
+    package layout. Idempotent and harmless if called repeatedly.
+    """
+    import sys
+    import types
+
+    if "ai_new" not in sys.modules:
+        pkg = types.ModuleType("ai_new")
+        pkg.__path__ = []          # mark as a package so submodules resolve
+        sys.modules["ai_new"] = pkg
+    sys.modules["ai_new.zero_day_detector"] = sys.modules[__name__]
+    setattr(sys.modules["ai_new"], "zero_day_detector", sys.modules[__name__])
+
 
 class TransactionAutoencoder(nn.Module):
     """
@@ -110,7 +148,7 @@ class ZeroDayDetector:
         self._ae_scaler     = ae_scaler
         self._p95           = p95_threshold
         self._p99           = p99_threshold
-        self._engineer      = FraudFeatureEngineer(user_baselines)
+        self._engineer      = LegacyFeatureAdapter(user_baselines)
         self._device        = device
         self._feature_cols  = FEATURE_COLS
 
@@ -152,6 +190,22 @@ class ZeroDayDetector:
                 )
 
         # Load autoencoder
+        #
+        # autoencoder.pth is a PICKLED MODEL OBJECT, not a state_dict, so the
+        # pickle records the class's ORIGINAL import path from the training
+        # notebook: ai_new.zero_day_detector.TransactionAutoencoder. That
+        # package does not exist in this repo — the same class lives here — so
+        # unpickling failed with "No module named 'ai_new'" and the pipeline
+        # silently fell back to the statistical detector.
+        #
+        # Register an alias so the pickle resolves to THIS module's class. The
+        # architecture is identical (encoder/decoder Sequentials, 22 inputs),
+        # and the weights come from the pickle, so nothing is reinterpreted.
+        #
+        # The alternative — asking for a re-export as a state_dict — is cleaner
+        # long term but needs the notebook re-run; this needs nothing.
+        _register_legacy_module_alias()
+
         autoencoder = torch.load(
             required["autoencoder.pth"],
             map_location=device,
@@ -166,6 +220,32 @@ class ZeroDayDetector:
         # Load thresholds
         with open(required["ae_thresholds.json"], encoding="utf-8") as f:
             thresholds = json.load(f)
+
+        # Verify the feature contract instead of assuming it.
+        #
+        # ae_thresholds.json records the exact column order the model was
+        # trained on. If a future retrain uses a different set, silently
+        # feeding it the legacy vector would put every value in the wrong
+        # semantic slot — which is precisely the failure this detector already
+        # had once: reconstruction error ~5,000x the threshold, so every
+        # ordinary transaction came back UNKNOWN_RISK and was challenged.
+        #
+        # Fail loudly. The pipeline catches this and falls back to the
+        # statistical detector, which is far better than a confidently wrong
+        # autoencoder. FraudEngine does the same check for XGBoost.
+        trained_cols = thresholds.get("feature_cols")
+        if trained_cols and list(trained_cols) != list(FEATURE_COLS):
+            missing = set(trained_cols) - set(FEATURE_COLS)
+            extra = set(FEATURE_COLS) - set(trained_cols)
+            raise ValueError(
+                "Zero-day feature contract mismatch: autoencoder.pth was trained "
+                f"on {len(trained_cols)} columns that do not match the adapter's "
+                f"{len(FEATURE_COLS)}.\n"
+                f"  only in model  : {sorted(missing) or 'none (order differs)'}\n"
+                f"  only in adapter: {sorted(extra) or 'none (order differs)'}\n"
+                "Update ai/utils/legacy_feature_adapter.py to match the model, or "
+                "retrain against the current adapter."
+            )
 
         # Load scaler
         with open(required["ae_scaler.pkl"], "rb") as f:

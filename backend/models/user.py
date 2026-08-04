@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, Enum as SqlEnum, String
+from sqlalchemy import Date, DateTime, Enum as SqlEnum, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import Boolean
@@ -71,6 +71,27 @@ class User(Base, TimestampMixin):
         Boolean,
         nullable=False,
         default=True,
+    )
+
+    # Task 2.2 — bank-grade login identifier (SecureWealth ID / CIF-style).
+    # Phone-number login was removed on evaluator guidance.
+    customer_id: Mapped[str | None] = mapped_column(
+        String(20),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
+
+    # Task 2.1 — Consent-based Account Aggregation
+    aa_consent: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+
+    aa_consent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     auth_credential: Mapped["AuthCredential"] = relationship(

@@ -28,6 +28,9 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { COLORS } from '../constants/colors';
+import { useFocusEffect } from '@react-navigation/native';
+import { useI18n } from '../i18n';
+import { DashboardSkeleton } from '../components/common/Skeleton';
 import {
   SPACING,
   TYPOGRAPHY,
@@ -81,13 +84,13 @@ const mapAccount = (a: AccountResponse): AccountVM => ({
 // logic keeps working. Adjust this rule if your backend encodes direction elsewhere.
 const CREDIT_CATEGORIES = new Set(['income', 'salary', 'refund', 'credit', 'interest']);
 const mapTransaction = (t: TransactionResponse): TransactionVM => {
-  const cat = String(t.merchant_category || '').toLowerCase();
+  const cat = String(t.fund_category || '').toLowerCase();
   const isCredit = CREDIT_CATEGORIES.has(cat);
   const magnitude = Math.abs(Number(t.amount) || 0);
   return {
     transactionId: t.transaction_id,
-    merchantName: t.merchant_name,
-    merchantCategory: t.merchant_category,
+    merchantName: t.fund_name,
+    merchantCategory: t.fund_category,
     transactionTime: t.transaction_time,
     channel: String(t.channel),
     amount: isCredit ? magnitude : -magnitude,
@@ -158,7 +161,22 @@ const getCategoryColor = (category: string): string => {
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 // Account Card — single slide in the carousel
-const AccountCard = ({ account }: { account: AccountVM }) => {
+// All three card actions were rendered without an onPress, so tapping them did
+// nothing at all — no navigation, no feedback. A control that looks pressable
+// and silently ignores the press reads as a broken app, which is the last
+// impression this screen should give.
+const AccountCard = ({
+  account,
+  onInvest,
+  onStatement,
+  onRefresh,
+}: {
+  account: AccountVM;
+  onInvest: () => void;
+  onStatement: () => void;
+  onRefresh: () => void;
+}) => {
+  const { t } = useI18n();
   const [balanceVisible, setBalanceVisible] = useState(true);
 
   // Color per bank
@@ -195,7 +213,7 @@ const AccountCard = ({ account }: { account: AccountVM }) => {
       {/* Balance row */}
       <View style={styles.balanceRow}>
         <View>
-          <Text style={styles.balanceLabel}>Available Balance</Text>
+          <Text style={styles.balanceLabel}>{t('dash.availableBalance')}</Text>
           <Text style={styles.balanceAmount}>
             {balanceVisible ? formatCurrency(account.balance) : '\u20B9 \u2022\u2022\u2022\u2022\u2022\u2022'}
           </Text>
@@ -204,6 +222,11 @@ const AccountCard = ({ account }: { account: AccountVM }) => {
           onPress={() => setBalanceVisible(!balanceVisible)}
           style={styles.eyeBtn}
           activeOpacity={0.7}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel={
+            balanceVisible ? t('a11y.hideBalance') : t('a11y.showBalance')
+          }
         >
           <Feather
             name={balanceVisible ? 'eye' : 'eye-off'}
@@ -215,19 +238,40 @@ const AccountCard = ({ account }: { account: AccountVM }) => {
 
       {/* Quick action buttons on card */}
       <View style={styles.cardActions}>
-        <TouchableOpacity style={styles.cardActionBtn}>
-          <Feather name="send" size={14} color={COLORS.textOnDark} />
-          <Text style={styles.cardActionText}>Send</Text>
+        <TouchableOpacity
+          style={styles.cardActionBtn}
+          onPress={onInvest}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.invest')}
+        >
+          <Feather name="trending-up" size={14} color={COLORS.textOnDark} />
+          <Text style={styles.cardActionText}>{t('common.invest')}</Text>
         </TouchableOpacity>
         <View style={styles.cardActionDivider} />
-        <TouchableOpacity style={styles.cardActionBtn}>
+        {/* Statement opens the activity history — every investment with the
+            security decision that was taken on it. This app only moves money
+            into mutual funds, so that history IS the statement. */}
+        <TouchableOpacity
+          style={styles.cardActionBtn}
+          onPress={onStatement}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={t('dash.statement')}
+        >
           <Feather name="file-text" size={14} color={COLORS.textOnDark} />
-          <Text style={styles.cardActionText}>Statement</Text>
+          <Text style={styles.cardActionText}>{t('dash.statement')}</Text>
         </TouchableOpacity>
         <View style={styles.cardActionDivider} />
-        <TouchableOpacity style={styles.cardActionBtn}>
+        <TouchableOpacity
+          style={styles.cardActionBtn}
+          onPress={onRefresh}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.refresh')}
+        >
           <Feather name="refresh-cw" size={14} color={COLORS.textOnDark} />
-          <Text style={styles.cardActionText}>Refresh</Text>
+          <Text style={styles.cardActionText}>{t('common.refresh')}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -250,12 +294,70 @@ const CarouselDots = ({ count, active }: { count: number; active: number }) => (
 );
 
 // Protection Status card — replaces the old confusing "security status"
+// Live protection signals.
+//
+// This card used to list "iPhone 14 Pro, Delhi / Daytime activity / Regular
+// spending pattern" — all three hardcoded and always green, regardless of the
+// customer's actual state. It claimed a device we never checked and a location
+// we never had. Every row below is now derived from something real: the
+// registered device list, the actual clock, and the customer's own recent
+// security decisions.
 const ProtectionStatusCard = () => {
+  const { t } = useI18n();
+  const [device, setDevice] = useState<{ name: string; trusted: boolean } | null>(null);
+  const [flagged, setFlagged] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .getDevices()
+      .then((list) => {
+        if (!active || !list?.length) return;
+        const d = list[0];
+        setDevice({
+          name: d.device_name,
+          trusted: String(d.trust_status).toUpperCase() === 'TRUSTED',
+        });
+      })
+      .catch(() => undefined);
+    api
+      .getMySecurityActivity()
+      .then((res) => {
+        if (!active) return;
+        const recent = (res.activities || []).slice(0, 10);
+        setFlagged(
+          recent.filter((a: any) => a.decision === 'CHALLENGE' || a.decision === 'BLOCK')
+            .length
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const hour = new Date().getHours();
+  const daytime = hour >= 6 && hour < 22;
+
   const signals = [
-    { icon: 'smartphone', label: 'iPhone 14 Pro, Delhi', ok: true },
-    { icon: 'sun', label: 'Daytime activity', ok: true },
-    { icon: 'activity', label: 'Regular spending pattern', ok: true },
-  ];
+    device && {
+      icon: 'smartphone',
+      label: `${device.name} · ${
+        device.trusted ? t('dash.deviceRecognised') : t('dash.deviceNew')
+      }`,
+      ok: device.trusted,
+    },
+    {
+      icon: daytime ? 'sun' : 'moon',
+      label: daytime ? t('dash.daytime') : t('dash.lateNight'),
+      ok: daytime,
+    },
+    flagged !== null && {
+      icon: 'activity',
+      label: flagged === 0 ? t('dash.noRecentFlags') : t('dash.recentFlags'),
+      ok: flagged === 0,
+    },
+  ].filter(Boolean) as { icon: string; label: string; ok: boolean }[];
 
   return (
     <View style={styles.protectionCard}>
@@ -265,8 +367,8 @@ const ProtectionStatusCard = () => {
           <Feather name="shield" size={18} color={COLORS.success} />
         </View>
         <View style={{ flex: 1, marginLeft: SPACING.sm }}>
-          <Text style={styles.protectionTitle}>Your Account is Protected</Text>
-          <Text style={styles.protectionSub}>All systems active \u00B7 No threats detected</Text>
+          <Text style={styles.protectionTitle}>{t('dash.protectedTitle')}</Text>
+          <Text style={styles.protectionSub}>{t('dash.allSystems')}</Text>
         </View>
         {/* Animated pulse dot */}
         <View style={styles.pulseDotOuter}>
@@ -297,7 +399,7 @@ const ProtectionStatusCard = () => {
       <View style={styles.protectionFooter}>
         <Feather name="info" size={12} color={COLORS.textTertiary} />
         <Text style={styles.protectionFooterText}>
-          Fraud monitoring is always on — 24 hours a day, 7 days a week
+          {t('dash.protectedSub')}
         </Text>
       </View>
     </View>
@@ -306,6 +408,7 @@ const ProtectionStatusCard = () => {
 
 // Transaction row
 const TransactionRow = ({ txn }: { txn: TransactionVM }) => {
+  const { t } = useI18n();
   const isCredit = txn.amount > 0;
   const isBlocked = txn.decision === 'BLOCK';
   const isWarn = txn.decision === 'WARN' || txn.decision === 'CHALLENGE';
@@ -332,13 +435,13 @@ const TransactionRow = ({ txn }: { txn: TransactionVM }) => {
           {isBlocked && (
             <View style={styles.blockedBadge}>
               <Feather name="shield" size={10} color={COLORS.danger} />
-              <Text style={styles.blockedText}>Stopped</Text>
+              <Text style={styles.blockedText}>{t('dash.stopped')}</Text>
             </View>
           )}
           {isWarn && !isBlocked && (
             <View style={styles.warnBadge}>
               <Feather name="alert-triangle" size={10} color={COLORS.caution} />
-              <Text style={styles.warnBadgeText}>Flagged</Text>
+              <Text style={styles.warnBadgeText}>{t('dash.flagged')}</Text>
             </View>
           )}
         </View>
@@ -366,26 +469,64 @@ const TransactionRow = ({ txn }: { txn: TransactionVM }) => {
 };
 
 // Wealth Tip card — single line from the wealth engine
-const WealthTipCard = () => (
-  <View style={styles.tipCard}>
-    <View style={styles.tipIconWrap}>
-      <Feather name="trending-up" size={18} color={COLORS.accent} />
-    </View>
-    <View style={{ flex: 1 }}>
-      <Text style={styles.tipLabel}>Smart Tip</Text>
-      <Text style={styles.tipText}>
-        Your savings rate is 65% this month — great! Consider opening a Fixed Deposit
-        to earn more interest on your idle balance.
-      </Text>
-    </View>
-    <TouchableOpacity style={styles.tipArrow}>
-      <Feather name="chevron-right" size={18} color={COLORS.accent} />
+// Wealth tip — the customer's real savings rate and the wealth engine's own
+// top recommendation.
+//
+// This previously showed a fixed sentence: "Your savings rate is 65% this month
+// — consider opening a Fixed Deposit." The 65% was invented and the advice was
+// the same for every customer and every month. If we cannot get real numbers
+// now, the card renders nothing rather than making some up.
+const WealthTipCard = ({ onPress }: { onPress?: () => void }) => {
+  const { t } = useI18n();
+  const [tip, setTip] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const cashflow = await api.getCashflow();
+        const income = Number(cashflow?.total_income) || 0;
+        const net = Number(cashflow?.net_cashflow) || 0;
+        if (!active || income <= 0) return;
+        const pct = Math.max(0, Math.round((net / income) * 100));
+        setTip(t('dash.savingsRate').replace('{pct}', String(pct)));
+      } catch {
+        // Consent not granted or aggregation unavailable — show nothing.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [t]);
+
+  if (!tip) return null;
+
+  return (
+    <TouchableOpacity
+      style={styles.tipCard}
+      onPress={onPress}
+      activeOpacity={onPress ? 0.8 : 1}
+      disabled={!onPress}
+    >
+      <View style={styles.tipIconWrap}>
+        <Feather name="trending-up" size={18} color={COLORS.accent} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.tipLabel}>{t('dash.smartTip')}</Text>
+        <Text style={styles.tipText}>{tip}</Text>
+      </View>
+      {onPress ? (
+        <View style={styles.tipArrow}>
+          <Feather name="chevron-right" size={18} color={COLORS.accent} />
+        </View>
+      ) : null}
     </TouchableOpacity>
-  </View>
-);
+  );
+};
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 const DashboardScreen = ({ navigation }: any) => {
+  const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -408,7 +549,7 @@ const DashboardScreen = ({ navigation }: any) => {
     } catch (e) {
       const err = e as ApiError;
       setError(
-        err instanceof ApiError && err.isNetworkError
+        err instanceof ApiError && err.isConnectivityError
           ? 'Cannot reach the server. Pull down to retry.'
           : 'Could not load your dashboard. Pull down to retry.'
       );
@@ -424,31 +565,47 @@ const DashboardScreen = ({ navigation }: any) => {
     })();
   }, [loadDashboard]);
 
+  // Balance and recent activity change as soon as an investment settles, so
+  // bring the tab up to date every time it regains focus. Silent refresh: the
+  // first focus is skipped because the initial load has just run.
+  const firstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      loadDashboard();
+    }, [loadDashboard])
+  );
+
+  // Wealth-first quick actions (task 1.2: Send → Invest)
   const quickActions = [
     {
       id: '1',
-      title: 'Send Money',
-      icon: 'send',
+      title: 'Invest',
+      icon: 'trending-up',
       color: COLORS.primary,
-      onPress: () => navigation.navigate('SendTab'),
+      onPress: () =>
+        navigation.navigate('WealthTab', { screen: 'TransactionInitiate' }),
     },
     {
       id: '2',
-      title: 'UPI Pay',
-      icon: 'zap',
+      title: 'My Wealth',
+      icon: 'pie-chart',
       color: '#6366F1',
-      onPress: () => {},
+      onPress: () => navigation.navigate('WealthTab'),
     },
     {
       id: '3',
-      title: 'Pay Bills',
-      icon: 'file-text',
+      title: 'Phishing Check',
+      icon: 'message-square',
       color: '#F59E0B',
-      onPress: () => {},
+      onPress: () => navigation.navigate('PhishingTab'),
     },
     {
       id: '4',
-      title: 'Check Safety',
+      title: 'Security',
       icon: 'shield',
       color: COLORS.success,
       onPress: () => navigation.navigate('SafetyTab'),
@@ -474,15 +631,12 @@ const DashboardScreen = ({ navigation }: any) => {
     setActiveCardIndex(Math.max(0, Math.min(index, Math.max(0, accounts.length - 1))));
   };
 
-  // ── Initial full-screen loader ──
+  // ── Initial load: skeleton, not a spinner ──
   if (loading) {
     return (
       <>
         <StatusBar barStyle="light-content" backgroundColor={COLORS.primaryDark} />
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading your dashboard\u2026</Text>
-        </View>
+        <DashboardSkeleton />
       </>
     );
   }
@@ -542,7 +696,17 @@ const DashboardScreen = ({ navigation }: any) => {
                 style={styles.carousel}
               >
                 {accounts.map((account) => (
-                  <AccountCard key={account.accountId} account={account} />
+                  <AccountCard
+                    key={account.accountId}
+                    account={account}
+                    onInvest={() =>
+                      navigation.navigate('WealthTab', { screen: 'TransactionInitiate' })
+                    }
+                    onStatement={() =>
+                      navigation.navigate('SafetyTab', { screen: 'MySecurityActivity' })
+                    }
+                    onRefresh={handleRefresh}
+                  />
                 ))}
               </ScrollView>
 
@@ -553,7 +717,7 @@ const DashboardScreen = ({ navigation }: any) => {
             !error && (
               <View style={styles.emptyAccounts}>
                 <Feather name="credit-card" size={22} color={COLORS.textOnDarkSub} />
-                <Text style={styles.emptyAccountsText}>No accounts linked yet</Text>
+                <Text style={styles.emptyAccountsText}>{t('dash.noAccounts')}</Text>
               </View>
             )
           )}
@@ -584,7 +748,7 @@ const DashboardScreen = ({ navigation }: any) => {
 
           {/* Protection Status */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Account Protection</Text>
+            <Text style={styles.sectionTitle}>{t('dash.accountProtection')}</Text>
             <ProtectionStatusCard />
           </View>
 
@@ -594,9 +758,9 @@ const DashboardScreen = ({ navigation }: any) => {
           {/* Recent Transactions */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Recent Transactions</Text>
+              <Text style={styles.sectionTitle}>{t('dash.recentTxns')}</Text>
               <TouchableOpacity activeOpacity={0.7}>
-                <Text style={styles.viewAllText}>View All</Text>
+                <Text style={styles.viewAllText}>{t('dash.viewAll')}</Text>
               </TouchableOpacity>
             </View>
 
@@ -605,7 +769,7 @@ const DashboardScreen = ({ navigation }: any) => {
                 <TransactionRow key={txn.transactionId} txn={txn} />
               ))
             ) : (
-              <Text style={styles.emptyTxnText}>No recent transactions.</Text>
+              <Text style={styles.emptyTxnText}>{t('dash.noTxns')}</Text>
             )}
           </View>
 
@@ -614,8 +778,8 @@ const DashboardScreen = ({ navigation }: any) => {
 
           {/* Smart Wealth Tip */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Wealth Insight</Text>
-            <WealthTipCard />
+            <Text style={styles.sectionTitle}>{t('dash.wealthInsight')}</Text>
+            <WealthTipCard onPress={() => navigation.navigate('WealthTab')} />
           </View>
 
           {/* Bottom padding so last card doesn't sit on tab bar */}

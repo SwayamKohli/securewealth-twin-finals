@@ -1,18 +1,13 @@
 // src/screens/TransactionInitiateScreen.tsx
-// SecureWealth Twin — Send Money
+// SecureWealth Twin — INVEST (task 1.2 / 2.3: investment-only workflow)
 //
-// BACKEND INTEGRATION (was accountsData mock JSON import):
-//  • Accounts now come from GET /api/v1/accounts/ on mount.
-//  • Backend (snake_case) mapped to the existing account shape so the UI
-//    components (AccountSelector, etc.) are unchanged.
-//  • Default "From" account = first account returned (no isPrimary field in API).
-//  • Payees stay on local mock (payees.json) — no payee endpoint exists.
-//  • Screen blocks with a loader until accounts load; shows an error/empty state
-//    if the fetch fails or returns nothing.
-//  • transactionData now also carries fromAccountId + channel so SecurityReview
-//    can call the real transaction/security endpoints. UI/styles unchanged.
+// Savings → Mutual Fund. Person-to-person and merchant transfers are gone.
+// The customer picks a fund, an amount, and a source Savings account;
+// SecurityReview then runs the real-time fraud check and completes the
+// investment. transactionData keeps the same contract keys SecurityReview
+// already consumes (amount, fromAccountId, channel, toLabel, toDetail, …).
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -26,30 +21,100 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { COLORS } from '../constants/colors';
 import { SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
-import GlossaryPopup from '../components/common/GlossaryPopup';
 import { api, ApiError } from '../api/apiService';
+import { useI18n } from '../i18n';
 import type { AccountResponse } from '../api/types';
 
-import payeesData from '../../mockData/payees.json';
-
 // ── Types ─────────────────────────────────────────────────────────────────────
-type TransferMode = 'self' | 'others' | 'upi';
-type PaymentMode = 'IMPS' | 'NEFT' | 'RTGS';
-
-// Local account view-model — same shape the UI expected from the old mock JSON.
 interface AccountVM {
   accountId: string;
   bankName: string;
-  accountType: string;        // title-case: "Savings" | "Current" | "Salary"
+  accountType: string;
   accountNumberMasked: string;
   balance: number;
 }
 
-// ── Mapper: backend → view-model ──────────────────────────────────────────────
+interface FundVM {
+  id: string;
+  name: string;
+  category: string;       // backend fund_category value
+  categoryLabel: string;  // display label
+  risk: 'Low' | 'Moderate' | 'High';
+  blurb: string;
+  color: string;
+  icon: string;
+}
+
+// ── Curated mutual-fund categories (behavioural products only — no stocks) ────
+const FUNDS: FundVM[] = [
+  {
+    id: 'f1',
+    name: 'Bluechip Equity Fund SIP',
+    category: 'EQUITY_MUTUAL_FUND',
+    categoryLabel: 'Equity Mutual Fund',
+    risk: 'High',
+    blurb: 'Long-term growth from large, established companies.',
+    color: '#6366F1',
+    icon: 'trending-up',
+  },
+  {
+    id: 'f2',
+    name: 'Nifty 50 Index Fund SIP',
+    category: 'INDEX_MUTUAL_FUND',
+    categoryLabel: 'Index Mutual Fund',
+    risk: 'Moderate',
+    blurb: 'Low-cost fund that simply tracks the market.',
+    color: '#0EA5E9',
+    icon: 'bar-chart-2',
+  },
+  {
+    id: 'f3',
+    name: 'Balanced Advantage Fund SIP',
+    category: 'BALANCED_MUTUAL_FUND',
+    categoryLabel: 'Balanced Mutual Fund',
+    risk: 'Moderate',
+    blurb: 'A mix of equity and debt for steadier growth.',
+    color: '#8B5CF6',
+    icon: 'shuffle',
+  },
+  {
+    id: 'f4',
+    name: 'Corporate Bond Debt Fund SIP',
+    category: 'DEBT_MUTUAL_FUND',
+    categoryLabel: 'Debt Mutual Fund',
+    risk: 'Low',
+    blurb: 'Stable returns from high-quality bonds.',
+    color: '#10B981',
+    icon: 'shield',
+  },
+  {
+    id: 'f5',
+    name: 'ELSS Tax Saver Fund SIP',
+    category: 'ELSS_MUTUAL_FUND',
+    categoryLabel: 'ELSS (Tax Saving)',
+    risk: 'High',
+    blurb: 'Save tax under 80C with a 3-year lock-in.',
+    color: '#F59E0B',
+    icon: 'percent',
+  },
+  {
+    id: 'f6',
+    name: 'Liquid Fund',
+    category: 'LIQUID_MUTUAL_FUND',
+    categoryLabel: 'Liquid Mutual Fund',
+    risk: 'Low',
+    blurb: 'Park money short-term; withdraw anytime.',
+    color: '#14B8A6',
+    icon: 'droplet',
+  },
+];
+
+const QUICK_AMOUNTS = [1000, 2500, 5000, 10000, 25000];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 const titleCase = (s: string): string =>
   s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
 
@@ -61,57 +126,15 @@ const mapAccount = (a: AccountResponse): AccountVM => ({
   balance: Number(a.balance) || 0,
 });
 
-// Map the UI's transfer/payment mode to the API channel enum.
-const toChannel = (transferMode: TransferMode, paymentMode: PaymentMode): string => {
-  if (transferMode === 'upi') return 'UPI';
-  if (transferMode === 'self') return 'IMPS'; // self transfer uses IMPS rails
-  return paymentMode; // others → chosen IMPS/NEFT/RTGS
+const formatCurrency = (n: number) => '₹' + n.toLocaleString('en-IN');
+
+const RISK_COLORS: Record<FundVM['risk'], string> = {
+  Low: COLORS.success,
+  Moderate: '#F59E0B',
+  High: '#EF4444',
 };
 
-// ── Quick amount chips ────────────────────────────────────────────────────────
-const QUICK_AMOUNTS = [500, 1000, 5000, 25000, 50000];
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-const formatCurrency = (n: number) => '\u20B9' + n.toLocaleString('en-IN');
-
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-// Transfer mode segmented control
-const ModeTabs = ({
-  mode,
-  onChange,
-}: {
-  mode: TransferMode;
-  onChange: (m: TransferMode) => void;
-}) => {
-  const tabs: { id: TransferMode; label: string }[] = [
-    { id: 'self', label: 'To Self' },
-    { id: 'others', label: 'To Others' },
-    { id: 'upi', label: 'UPI ID' },
-  ];
-
-  return (
-    <View style={styles.modeTabsWrap}>
-      {tabs.map((tab) => {
-        const active = mode === tab.id;
-        return (
-          <TouchableOpacity
-            key={tab.id}
-            style={[styles.modeTab, active && styles.modeTabActive]}
-            onPress={() => onChange(tab.id)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.modeTabText, active && styles.modeTabTextActive]}>
-              {tab.label}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-};
-
-// Account selector card (From Account)
+// ── Account selector ──────────────────────────────────────────────────────────
 const AccountSelector = ({
   accounts,
   selectedId,
@@ -137,9 +160,9 @@ const AccountSelector = ({
         <View style={styles.accountIconWrap}>
           <Feather name="credit-card" size={18} color={COLORS.primary} />
         </View>
-        <View style={styles.accountTextWrap}>
+        <View style={styles.flex1}>
           <Text style={styles.accountCardTitle}>
-            {selected.bankName} {'\u00B7'} {selected.accountType}
+            {selected.bankName} {'·'} {selected.accountType}
           </Text>
           <Text style={styles.accountCardSub}>{selected.accountNumberMasked}</Text>
         </View>
@@ -153,86 +176,96 @@ const AccountSelector = ({
         </View>
       </TouchableOpacity>
 
-      {expanded && (
-        <View style={styles.accountList}>
-          {accounts
-            .filter((a) => a.accountId !== selectedId)
-            .map((acc) => (
-              <TouchableOpacity
-                key={acc.accountId}
-                style={styles.accountListItem}
-                onPress={() => {
-                  onSelect(acc.accountId);
-                  setExpanded(false);
-                }}
-                activeOpacity={0.7}
-              >
-                <View style={styles.accountIconWrap}>
-                  <Feather name="credit-card" size={16} color={COLORS.textSecondary} />
-                </View>
-                <View style={styles.accountTextWrap}>
-                  <Text style={styles.accountListTitle}>
-                    {acc.bankName} {'\u00B7'} {acc.accountType}
-                  </Text>
-                  <Text style={styles.accountCardSub}>{acc.accountNumberMasked}</Text>
-                </View>
-                <Text style={styles.accountListBalance}>{formatCurrency(acc.balance)}</Text>
-              </TouchableOpacity>
-            ))}
-        </View>
-      )}
+      {expanded &&
+        accounts
+          .filter((a) => a.accountId !== selectedId)
+          .map((acc) => (
+            <TouchableOpacity
+              key={acc.accountId}
+              style={styles.accountListItem}
+              onPress={() => {
+                onSelect(acc.accountId);
+                setExpanded(false);
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={styles.accountIconWrap}>
+                <Feather name="credit-card" size={16} color={COLORS.textSecondary} />
+              </View>
+              <View style={styles.flex1}>
+                <Text style={styles.accountCardTitle}>
+                  {acc.bankName} {'·'} {acc.accountType}
+                </Text>
+                <Text style={styles.accountCardSub}>{acc.accountNumberMasked}</Text>
+              </View>
+              <Text style={styles.accountCardBalance}>{formatCurrency(acc.balance)}</Text>
+            </TouchableOpacity>
+          ))}
     </View>
   );
 };
 
-// Payee avatar chip
-const PayeeAvatar = ({
-  payee,
+// ── Fund card ─────────────────────────────────────────────────────────────────
+const FundCard = ({
+  fund,
   selected,
   onPress,
 }: {
-  payee: typeof payeesData[0];
+  fund: FundVM;
   selected: boolean;
   onPress: () => void;
 }) => (
-  <TouchableOpacity style={styles.payeeChip} onPress={onPress} activeOpacity={0.7}>
-    <View
-      style={[
-        styles.payeeAvatar,
-        { backgroundColor: payee.avatarColor + '30' },
-        selected && styles.payeeAvatarSelected,
-      ]}
-    >
-      <Text style={[styles.payeeInitials, { color: payee.avatarColor }]}>{payee.initials}</Text>
-      {selected && (
-        <View style={styles.payeeCheckBadge}>
-          <Feather name="check" size={10} color={COLORS.textOnDark} />
-        </View>
-      )}
+  <TouchableOpacity
+    style={[styles.fundCard, selected && styles.fundCardSelected]}
+    onPress={onPress}
+    activeOpacity={0.75}
+  >
+    <View style={[styles.fundIconWrap, { backgroundColor: fund.color + '22' }]}>
+      <Feather name={fund.icon as any} size={18} color={fund.color} />
     </View>
-    <Text style={styles.payeeName} numberOfLines={1}>
-      {payee.name.split(' ')[0]}
-    </Text>
+    <View style={styles.flex1}>
+      <Text style={styles.fundName}>{fund.name}</Text>
+      <Text style={styles.fundBlurb}>{fund.blurb}</Text>
+      <View style={styles.fundMetaRow}>
+        <Text style={styles.fundCategory}>{fund.categoryLabel}</Text>
+        <View style={[styles.riskPill, { backgroundColor: RISK_COLORS[fund.risk] + '22' }]}>
+          <Text style={[styles.riskPillText, { color: RISK_COLORS[fund.risk] }]}>
+            {fund.risk} risk
+          </Text>
+        </View>
+      </View>
+    </View>
+    <View style={[styles.radio, selected && styles.radioSelected]}>
+      {selected && <Feather name="check" size={12} color={COLORS.textOnDark} />}
+    </View>
   </TouchableOpacity>
 );
 
-// ── Main Screen ───────────────────────────────────────────────────────────────
-const TransactionInitiateScreen = ({ navigation }: any) => {
-  const insets = useSafeAreaInsets();
-
-  // ── Accounts (from API) ──
+// ── Screen ────────────────────────────────────────────────────────────────────
+const TransactionInitiateScreen = ({ navigation, route }: any) => {
+  const { t } = useI18n();
+  // Task 4.11 — arriving from "Start this" on a wealth recommendation.
+  // We pre-select the closest matching fund and amount, but change nothing
+  // else: the customer still confirms, and the security pipeline still runs.
+  const prefill = route?.params?.prefill as
+    | { amount?: number; fundCategory?: string; fundName?: string; source?: string }
+    | undefined;
   const [accounts, setAccounts] = useState<AccountVM[]>([]);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [accountsError, setAccountsError] = useState<string | null>(null);
 
-  const [transferMode, setTransferMode] = useState<TransferMode>('others');
   const [fromAccountId, setFromAccountId] = useState<string>('');
-  const [selfToAccountId, setSelfToAccountId] = useState<string | null>(null);
-  const [selectedPayeeId, setSelectedPayeeId] = useState<string | null>(null);
-  const [manualEntry, setManualEntry] = useState('');
-  const [amount, setAmount] = useState('');
-  const [paymentMode, setPaymentMode] = useState<PaymentMode>('IMPS');
-  const [note, setNote] = useState('');
+  const [selectedFundId, setSelectedFundId] = useState<string | null>(() => {
+    if (!prefill) return null;
+    const byCategory = FUNDS.find((f) => f.category === prefill.fundCategory);
+    const byName = FUNDS.find(
+      (f) => prefill.fundName && f.name.toLowerCase() === prefill.fundName.toLowerCase()
+    );
+    return (byName || byCategory)?.id ?? null;
+  });
+  const [amount, setAmount] = useState(
+    prefill?.amount && prefill.amount > 0 ? String(Math.round(prefill.amount)) : ''
+  );
   const [submitting, setSubmitting] = useState(false);
 
   const loadAccounts = useCallback(async () => {
@@ -240,14 +273,16 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
     setLoadingAccounts(true);
     try {
       const list = await api.getAccounts();
-      const mapped = (list || []).map(mapAccount);
+      // Investments are funded from Savings accounts only (task 2.3).
+      const mapped = (list || [])
+        .map(mapAccount)
+        .filter((a) => a.accountType.toUpperCase() === 'SAVINGS');
       setAccounts(mapped);
-      // Default "From" = first account (no isPrimary field in API).
       if (mapped.length > 0) setFromAccountId(mapped[0].accountId);
     } catch (e) {
       const err = e as ApiError;
       setAccountsError(
-        err instanceof ApiError && err.isNetworkError
+        err instanceof ApiError && err.isConnectivityError
           ? 'Cannot reach the server. Please try again.'
           : 'Could not load your accounts. Please try again.'
       );
@@ -261,116 +296,68 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
   }, [loadAccounts]);
 
   const fromAccount = accounts.find((a) => a.accountId === fromAccountId);
-  const selfAccounts = accounts.filter((a) => a.accountId !== fromAccountId);
-
-  // Reset "to" selection when switching modes
-  const handleModeChange = (mode: TransferMode) => {
-    setTransferMode(mode);
-    setSelfToAccountId(null);
-    setSelectedPayeeId(null);
-    setManualEntry('');
-  };
-
-  const handlePayeeSelect = (payeeId: string) => {
-    setSelectedPayeeId((prev) => (prev === payeeId ? null : payeeId));
-    setManualEntry('');
-  };
-
-  // Build a human-readable "to" summary + whether this is a new recipient
-  const toSummary = useMemo(() => {
-    if (transferMode === 'self') {
-      const acc = selfAccounts.find((a) => a.accountId === selfToAccountId);
-      return acc
-        ? {
-            label: `${acc.bankName} \u00B7 ${acc.accountType}`,
-            detail: acc.accountNumberMasked,
-            isNew: false,
-          }
-        : null;
-    }
-
-    if (selectedPayeeId) {
-      const payee = payeesData.find((p) => p.id === selectedPayeeId)!;
-      const detail = transferMode === 'upi' ? payee.upiId : payee.accountNumberMasked;
-      return { label: payee.name, detail, isNew: false };
-    }
-
-    if (manualEntry.trim().length > 0) {
-      return {
-        label: transferMode === 'upi' ? 'New UPI recipient' : 'New account',
-        detail: manualEntry.trim(),
-        isNew: true,
-      };
-    }
-
-    return null;
-  }, [transferMode, selfToAccountId, selectedPayeeId, manualEntry, selfAccounts]);
-
+  const selectedFund = FUNDS.find((f) => f.id === selectedFundId) || null;
   const numericAmount = Number(amount) || 0;
 
   const handleSubmit = () => {
     if (!fromAccount) {
-      Alert.alert('No account selected', 'Please choose an account to send from.');
+      Alert.alert('No account selected', 'Please choose a Savings account to invest from.');
       return;
     }
-    // Local const so TypeScript narrows away `undefined` for the rest of this fn.
-    const from = fromAccount;
-    if (!toSummary) {
-      Alert.alert('Add a recipient', 'Please choose or enter who you want to send money to.');
+    if (!selectedFund) {
+      Alert.alert('Choose a fund', 'Please select the mutual fund you want to invest in.');
       return;
     }
     if (numericAmount <= 0) {
-      Alert.alert('Enter an amount', 'Please enter how much you want to send.');
+      Alert.alert('Enter an amount', 'Please enter how much you want to invest.');
       return;
     }
-    if (numericAmount > from.balance) {
+    if (numericAmount > fromAccount.balance) {
       Alert.alert(
         'Not enough balance',
-        `Your ${from.accountType} account has ${formatCurrency(from.balance)} available.`
+        `Your ${fromAccount.accountType} account has ${formatCurrency(
+          fromAccount.balance
+        )} available.`
       );
       return;
     }
 
     setSubmitting(true);
 
-    const channel = toChannel(transferMode, paymentMode);
-
+    // Same contract keys SecurityReview already consumes.
     const transactionData = {
       amount: numericAmount,
-      // NEW: raw identifiers so SecurityReview can call the real endpoints.
-      fromAccountId: from.accountId,
-      channel,
+      fromAccountId: fromAccount.accountId,
+      channel: 'UPI',
       fromAccount: {
-        masked: from.accountNumberMasked,
-        bankName: from.bankName,
-        accountType: from.accountType,
+        masked: fromAccount.accountNumberMasked,
+        bankName: fromAccount.bankName,
+        accountType: fromAccount.accountType,
       },
-      toLabel: toSummary.label,
-      toDetail: toSummary.detail,
-      paymentMode:
-        transferMode === 'upi' ? 'UPI' : transferMode === 'self' ? 'Self Transfer' : paymentMode,
-      note: note.trim(),
-      isNewRecipient: toSummary.isNew,
+      toLabel: selectedFund.name,
+      toDetail: selectedFund.categoryLabel,
+      fundCategory: selectedFund.category,
+      paymentMode: 'Investment',
+      note: '',
+      isNewRecipient: false,
       timestamp: new Date().toISOString(),
     };
 
     setTimeout(() => {
       setSubmitting(false);
       navigation.navigate('SecurityReview', { transactionData });
-    }, 300);
+    }, 250);
   };
 
-  // ── Loading gate (block until accounts load) ──
   if (loadingAccounts) {
     return (
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color={COLORS.primary} />
-        <Text style={styles.centerText}>Loading your accounts\u2026</Text>
+        <Text style={styles.centerText}>Loading your accounts{'…'}</Text>
       </View>
     );
   }
 
-  // ── Error / empty gate ──
   if (accountsError || accounts.length === 0) {
     return (
       <View style={styles.centerContainer}>
@@ -380,12 +367,12 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
           color={COLORS.textTertiary}
         />
         <Text style={styles.centerText}>
-          {accountsError || 'No accounts available to send from.'}
+          {accountsError || 'No Savings account available to invest from.'}
         </Text>
         {accountsError && (
           <TouchableOpacity style={styles.retryBtn} onPress={loadAccounts} activeOpacity={0.8}>
             <Feather name="refresh-cw" size={16} color={COLORS.textOnDark} />
-            <Text style={styles.retryBtnText}>Try Again</Text>
+            <Text style={styles.retryBtnText}>{t('common.tryAgain')}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -407,320 +394,152 @@ const TransactionInitiateScreen = ({ navigation }: any) => {
         <View style={styles.trustBanner}>
           <Feather name="shield" size={16} color={COLORS.primary} />
           <Text style={styles.trustBannerText}>
-            Every payment is automatically checked to help keep your money safe.
+            {t('invest.trustBanner')}
           </Text>
         </View>
 
-        {/* Transfer mode tabs */}
-        <ModeTabs mode={transferMode} onChange={handleModeChange} />
-
-        {/* From Account */}
+        {/* From account */}
         <AccountSelector
           accounts={accounts}
           selectedId={fromAccountId}
           onSelect={setFromAccountId}
-          label="From Account"
+          label={t('invest.from')}
         />
 
-        {/* To Account */}
+        {/* Fund selection */}
         <View style={styles.fieldGroup}>
-          <Text style={styles.fieldLabel}>
-            {transferMode === 'self'
-              ? 'To Account'
-              : transferMode === 'upi'
-              ? 'Send To (UPI)'
-              : 'Send To'}
-          </Text>
-
-          {transferMode === 'self' ? (
-            // Self transfer: pick from other own accounts
-            <View style={styles.accountList}>
-              {selfAccounts.map((acc) => {
-                const active = acc.accountId === selfToAccountId;
-                return (
-                  <TouchableOpacity
-                    key={acc.accountId}
-                    style={[styles.accountListItem, active && styles.accountListItemActive]}
-                    onPress={() => setSelfToAccountId(acc.accountId)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.accountIconWrap}>
-                      <Feather
-                        name="credit-card"
-                        size={16}
-                        color={active ? COLORS.primary : COLORS.textSecondary}
-                      />
-                    </View>
-                    <View style={styles.accountTextWrap}>
-                      <Text style={styles.accountListTitle}>
-                        {acc.bankName} {'\u00B7'} {acc.accountType}
-                      </Text>
-                      <Text style={styles.accountCardSub}>{acc.accountNumberMasked}</Text>
-                    </View>
-                    {active && <Feather name="check-circle" size={18} color={COLORS.primary} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          ) : (
-            // Others / UPI: recent payees + manual entry
-            <>
-              <Text style={styles.subtleLabel}>Recent</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.payeeRow}
-              >
-                {payeesData.map((payee) => (
-                  <PayeeAvatar
-                    key={payee.id}
-                    payee={payee}
-                    selected={selectedPayeeId === payee.id}
-                    onPress={() => handlePayeeSelect(payee.id)}
-                  />
-                ))}
-                {/* Add new payee */}
-                <TouchableOpacity style={styles.payeeChip} activeOpacity={0.7}>
-                  <View style={[styles.payeeAvatar, styles.payeeAvatarAdd]}>
-                    <Feather name="plus" size={18} color={COLORS.primary} />
-                  </View>
-                  <Text style={styles.payeeName}>Add New</Text>
-                </TouchableOpacity>
-              </ScrollView>
-
-              <View style={styles.orDivider}>
-                <View style={styles.orLine} />
-                <Text style={styles.orText}>or enter manually</Text>
-                <View style={styles.orLine} />
-              </View>
-
-              <TextInput
-                style={styles.input}
-                placeholder={
-                  transferMode === 'upi' ? 'Enter UPI ID (e.g. name@bank)' : 'Enter account number'
-                }
-                placeholderTextColor={COLORS.textTertiary}
-                value={selectedPayeeId ? '' : manualEntry}
-                onChangeText={(text) => {
-                  setManualEntry(text);
-                  setSelectedPayeeId(null);
-                }}
-                autoCapitalize="none"
-              />
-            </>
-          )}
+          <Text style={styles.fieldLabel}>{t('invest.chooseFund')}</Text>
+          {FUNDS.map((fund) => (
+            <FundCard
+              key={fund.id}
+              fund={fund}
+              selected={fund.id === selectedFundId}
+              onPress={() =>
+                setSelectedFundId((prev) => (prev === fund.id ? null : fund.id))
+              }
+            />
+          ))}
         </View>
 
         {/* Amount */}
         <View style={styles.fieldGroup}>
-          <Text style={styles.fieldLabel}>Amount</Text>
-          <View style={styles.amountInputWrap}>
-            <Text style={styles.amountCurrency}>{'\u20B9'}</Text>
+          <Text style={styles.fieldLabel}>{t('invest.amount')}</Text>
+          <View style={styles.amountRow}>
+            <Text style={styles.rupee}>{'₹'}</Text>
             <TextInput
               style={styles.amountInput}
+              value={amount}
+              onChangeText={(t) => setAmount(t.replace(/[^\d]/g, ''))}
+              keyboardType="number-pad"
               placeholder="0"
               placeholderTextColor={COLORS.textTertiary}
-              value={amount}
-              onChangeText={(text) => setAmount(text.replace(/[^\d]/g, ''))}
-              keyboardType="number-pad"
-              maxLength={9}
+              maxLength={8}
             />
           </View>
-
-          {/* Quick amount chips */}
           <View style={styles.chipsRow}>
-            {QUICK_AMOUNTS.map((amt) => (
+            {QUICK_AMOUNTS.map((q) => (
               <TouchableOpacity
-                key={amt}
-                style={[styles.amountChip, numericAmount === amt && styles.amountChipActive]}
-                onPress={() => setAmount(String(amt))}
+                key={q}
+                style={[styles.chip, numericAmount === q && styles.chipActive]}
+                onPress={() => setAmount(String(q))}
                 activeOpacity={0.7}
               >
                 <Text
-                  style={[
-                    styles.amountChipText,
-                    numericAmount === amt && styles.amountChipTextActive,
-                  ]}
+                  style={[styles.chipText, numericAmount === q && styles.chipTextActive]}
                 >
-                  {'\u20B9'}{amt >= 1000 ? `${amt / 1000}k` : amt}
+                  {formatCurrency(q)}
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
-
-          {/* Balance hint */}
-          <Text style={styles.balanceHint}>Available: {formatCurrency(fromAccount?.balance ?? 0)}</Text>
         </View>
 
-        {/* Payment Mode (hidden for UPI) */}
-        {transferMode !== 'upi' && (
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Payment Mode</Text>
-            <View style={styles.paymentModeRow}>
-              {(['IMPS', 'NEFT', 'RTGS'] as PaymentMode[]).map((mode) => {
-                const active = paymentMode === mode;
-                return (
-                  <TouchableOpacity
-                    key={mode}
-                    style={[styles.paymentModeCard, active && styles.paymentModeCardActive]}
-                    onPress={() => setPaymentMode(mode)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.paymentModeHeader}>
-                      <Text
-                        style={[styles.paymentModeName, active && styles.paymentModeNameActive]}
-                      >
-                        {mode}
-                      </Text>
-                      <GlossaryPopup term={mode as any}>
-                        <Feather name="help-circle" size={14} color={COLORS.textTertiary} />
-                      </GlossaryPopup>
-                    </View>
-                    <Text style={styles.paymentModeDesc}>
-                      {mode === 'IMPS' && 'Within minutes'}
-                      {mode === 'NEFT' && 'A few hours'}
-                      {mode === 'RTGS' && 'Large amounts'}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+        {/* Summary + CTA */}
+        {selectedFund && numericAmount > 0 && (
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryText}>
+              {t('invest.investingAmt')} <Text style={styles.summaryBold}>{formatCurrency(numericAmount)}</Text>{' '}
+              in <Text style={styles.summaryBold}>{selectedFund.name}</Text>
+            </Text>
           </View>
         )}
 
-        {/* Note */}
-        <View style={styles.fieldGroup}>
-          <Text style={styles.fieldLabel}>Note (optional)</Text>
-          <TextInput
-            style={[styles.input, styles.noteInput]}
-            placeholder="What's this for?"
-            placeholderTextColor={COLORS.textTertiary}
-            value={note}
-            onChangeText={setNote}
-            multiline
-          />
-        </View>
-
-        {/* Bottom spacing so sticky button doesn't overlap last field */}
-        <View style={{ height: 100 }} />
-      </ScrollView>
-
-      {/* Sticky footer button */}
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, SPACING.md) }]}>
         <TouchableOpacity
-          style={[styles.submitBtn, (!toSummary || numericAmount <= 0) && styles.submitBtnDisabled]}
+          style={[
+            styles.submitBtn,
+            (!selectedFund || numericAmount <= 0 || submitting) && styles.submitBtnDisabled,
+          ]}
           onPress={handleSubmit}
-          disabled={submitting || !toSummary || numericAmount <= 0}
-          activeOpacity={0.8}
+          disabled={!selectedFund || numericAmount <= 0 || submitting}
+          activeOpacity={0.85}
         >
-          <Text style={styles.submitBtnText}>
-            {submitting
-              ? 'Reviewing\u2026'
-              : numericAmount > 0
-              ? `Review & Pay ${formatCurrency(numericAmount)}`
-              : 'Review & Pay'}
-          </Text>
-          <Feather name="arrow-right" size={18} color={COLORS.textOnDark} />
+          {submitting ? (
+            <ActivityIndicator color={COLORS.textOnDark} />
+          ) : (
+            <>
+              <Feather name="shield" size={18} color={COLORS.textOnDark} />
+              <Text style={styles.submitBtnText}>{t('invest.cta')}</Text>
+            </>
+          )}
         </TouchableOpacity>
-      </View>
+
+        <Text style={styles.disclaimer}>
+          {t('invest.disclaimer')}
+        </Text>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 };
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  scrollContent: {
-    padding: SPACING.lg,
-  },
+  container: { flex: 1, backgroundColor: COLORS.background },
+  scrollContent: { padding: SPACING.lg, paddingBottom: SPACING.xxl },
+  flex1: { flex: 1 },
 
-  // Loading / error / empty gate
   centerContainer: {
     flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: COLORS.background,
     padding: SPACING.xl,
-    gap: SPACING.md,
   },
   centerText: {
-    ...TYPOGRAPHY.bodySm,
+    ...TYPOGRAPHY.body,
     color: COLORS.textSecondary,
+    marginTop: SPACING.md,
     textAlign: 'center',
   },
   retryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: SPACING.sm,
+    gap: SPACING.xs,
+    marginTop: SPACING.lg,
     backgroundColor: COLORS.primary,
-    borderRadius: BORDER_RADIUS.lg,
-    paddingVertical: SPACING.sm,
     paddingHorizontal: SPACING.lg,
-    marginTop: SPACING.sm,
+    paddingVertical: SPACING.sm,
+    borderRadius: BORDER_RADIUS.md,
   },
-  retryBtnText: {
-    ...TYPOGRAPHY.buttonSm,
-    color: COLORS.textOnDark,
-  },
+  retryBtnText: { ...TYPOGRAPHY.bodyMedium, color: COLORS.textOnDark },
 
   trustBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.sm,
     backgroundColor: COLORS.primaryVeryLight,
-    borderRadius: BORDER_RADIUS.lg,
+    borderRadius: BORDER_RADIUS.md,
     padding: SPACING.md,
     marginBottom: SPACING.lg,
   },
-  trustBannerText: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.primaryMedium,
-    flex: 1,
-    lineHeight: 18,
-  },
+  trustBannerText: { ...TYPOGRAPHY.caption, color: COLORS.primaryDark, flex: 1 },
 
-  modeTabsWrap: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: BORDER_RADIUS.full,
-    padding: 4,
-    marginBottom: SPACING.lg,
-  },
-  modeTab: {
-    flex: 1,
-    paddingVertical: SPACING.sm,
-    borderRadius: BORDER_RADIUS.full,
-    alignItems: 'center',
-  },
-  modeTabActive: {
-    backgroundColor: COLORS.primary,
-    ...SHADOWS.small,
-  },
-  modeTabText: {
-    ...TYPOGRAPHY.bodySmMedium,
-    color: COLORS.textSecondary,
-  },
-  modeTabTextActive: {
-    color: COLORS.textOnDark,
-  },
-
-  fieldGroup: {
-    marginBottom: SPACING.lg,
-  },
+  fieldGroup: { marginBottom: SPACING.lg },
   fieldLabel: {
-    ...TYPOGRAPHY.label,
+    ...TYPOGRAPHY.captionBold,
     color: COLORS.textSecondary,
     marginBottom: SPACING.sm,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  subtleLabel: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.textTertiary,
-    marginBottom: SPACING.sm,
+    letterSpacing: 0.6,
   },
 
   accountCard: {
@@ -728,265 +547,136 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: COLORS.surface,
     borderRadius: BORDER_RADIUS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
     padding: SPACING.md,
     gap: SPACING.md,
-    ...SHADOWS.small,
-  },
-  accountIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: BORDER_RADIUS.md,
-    backgroundColor: COLORS.primaryVeryLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexShrink: 0,
-  },
-  accountTextWrap: {
-    flex: 1,
-    minWidth: 0,
-  },
-  accountCardTitle: {
-    ...TYPOGRAPHY.bodySmMedium,
-    color: COLORS.text,
-    fontWeight: '600',
-  },
-  accountCardSub: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.textTertiary,
-    marginTop: 1,
-  },
-  accountBalanceWrap: {
-    alignItems: 'flex-end',
-    gap: 2,
-    flexShrink: 0,
-  },
-  accountCardBalance: {
-    ...TYPOGRAPHY.bodySmMedium,
-    color: COLORS.text,
-    fontWeight: '700',
-  },
-  accountList: {
-    marginTop: SPACING.sm,
-    gap: SPACING.sm,
   },
   accountListItem: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.surface,
-    borderRadius: BORDER_RADIUS.lg,
-    padding: SPACING.md,
-    gap: SPACING.md,
+    borderRadius: BORDER_RADIUS.md,
     borderWidth: 1,
     borderColor: COLORS.border,
-  },
-  accountListItemActive: {
-    borderColor: COLORS.primary,
-    backgroundColor: COLORS.primaryVeryLight,
-  },
-  accountListTitle: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.text,
-    fontWeight: '600',
-  },
-  accountListBalance: {
-    ...TYPOGRAPHY.bodySm,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-  },
-
-  payeeRow: {
+    padding: SPACING.md,
     gap: SPACING.md,
-    paddingBottom: SPACING.xs,
+    marginTop: SPACING.xs,
   },
-  payeeChip: {
-    alignItems: 'center',
-    width: 64,
-  },
-  payeeAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: BORDER_RADIUS.full,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: SPACING.xs,
-    position: 'relative',
-  },
-  payeeAvatarSelected: {
-    borderWidth: 2,
-    borderColor: COLORS.primary,
-  },
-  payeeAvatarAdd: {
+  accountIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: COLORS.primaryVeryLight,
-    borderWidth: 1.5,
-    borderColor: COLORS.primary,
-    borderStyle: 'dashed',
-  },
-  payeeInitials: {
-    ...TYPOGRAPHY.bodyMedium,
-    fontWeight: '700',
-  },
-  payeeCheckBadge: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 16,
-    height: 16,
-    borderRadius: BORDER_RADIUS.full,
-    backgroundColor: COLORS.primary,
-    justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.background,
+    justifyContent: 'center',
   },
-  payeeName: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.text,
-    textAlign: 'center',
-  },
+  accountCardTitle: { ...TYPOGRAPHY.bodyMedium, color: COLORS.text },
+  accountCardSub: { ...TYPOGRAPHY.caption, color: COLORS.textTertiary },
+  accountBalanceWrap: { alignItems: 'flex-end', gap: 2 },
+  accountCardBalance: { ...TYPOGRAPHY.bodyMedium, color: COLORS.primary },
 
-  orDivider: {
+  fundCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
+    borderWidth: 1.5,
+    borderColor: COLORS.border,
+    padding: SPACING.md,
+    gap: SPACING.md,
+    marginBottom: SPACING.sm,
+  },
+  fundCardSelected: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primaryVeryLight,
+    ...SHADOWS.small,
+  },
+  fundIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fundName: { ...TYPOGRAPHY.bodyMedium, color: COLORS.text },
+  fundBlurb: { ...TYPOGRAPHY.caption, color: COLORS.textSecondary, marginTop: 1 },
+  fundMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.sm,
-    marginVertical: SPACING.md,
+    marginTop: SPACING.xs,
   },
-  orLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: COLORS.border,
+  fundCategory: { ...TYPOGRAPHY.caption, color: COLORS.textTertiary },
+  riskPill: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 2,
+    borderRadius: 999,
   },
-  orText: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.textTertiary,
-  },
-
-  input: {
-    backgroundColor: COLORS.surface,
-    borderWidth: 1,
+  riskPillText: { fontSize: 10, fontWeight: '700' },
+  radio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
     borderColor: COLORS.border,
-    borderRadius: BORDER_RADIUS.lg,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.md,
-    ...TYPOGRAPHY.body,
-    color: COLORS.text,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  noteInput: {
-    minHeight: 60,
-    textAlignVertical: 'top',
-  },
+  radioSelected: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
 
-  amountInputWrap: {
+  amountRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: BORDER_RADIUS.lg,
     paddingHorizontal: SPACING.lg,
   },
-  amountCurrency: {
-    ...TYPOGRAPHY.h2,
-    color: COLORS.textTertiary,
-    marginRight: SPACING.sm,
-  },
-  amountInput: {
-    flex: 1,
-    ...TYPOGRAPHY.display,
-    color: COLORS.text,
-    paddingVertical: SPACING.md,
-  },
-  chipsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: SPACING.sm,
-    marginTop: SPACING.md,
-  },
-  amountChip: {
+  rupee: { ...TYPOGRAPHY.h2, color: COLORS.textSecondary, marginRight: SPACING.xs },
+  amountInput: { ...TYPOGRAPHY.h1, color: COLORS.text, flex: 1, paddingVertical: SPACING.md },
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.sm, marginTop: SPACING.sm },
+  chip: {
     paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
-    borderRadius: BORDER_RADIUS.full,
-    backgroundColor: COLORS.surfaceLight,
+    paddingVertical: SPACING.xs,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: COLORS.border,
-  },
-  amountChipActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-  },
-  amountChipText: {
-    ...TYPOGRAPHY.bodySmMedium,
-    color: COLORS.textSecondary,
-  },
-  amountChipTextActive: {
-    color: COLORS.textOnDark,
-  },
-  balanceHint: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.textTertiary,
-    marginTop: SPACING.sm,
-  },
-
-  paymentModeRow: {
-    flexDirection: 'row',
-    gap: SPACING.sm,
-  },
-  paymentModeCard: {
-    flex: 1,
     backgroundColor: COLORS.surface,
-    borderRadius: BORDER_RADIUS.lg,
-    padding: SPACING.md,
-    borderWidth: 1.5,
-    borderColor: COLORS.border,
   },
-  paymentModeCardActive: {
-    borderColor: COLORS.primary,
+  chipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  chipText: { ...TYPOGRAPHY.caption, color: COLORS.textSecondary },
+  chipTextActive: { color: COLORS.textOnDark, fontWeight: '700' },
+
+  summaryCard: {
     backgroundColor: COLORS.primaryVeryLight,
+    borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md,
+    marginBottom: SPACING.md,
   },
-  paymentModeHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  paymentModeName: {
-    ...TYPOGRAPHY.bodySmMedium,
-    color: COLORS.textSecondary,
-    fontWeight: '700',
-  },
-  paymentModeNameActive: {
-    color: COLORS.primary,
-  },
-  paymentModeDesc: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.textTertiary,
-    marginTop: 2,
-  },
+  summaryText: { ...TYPOGRAPHY.body, color: COLORS.primaryDark },
+  summaryBold: { fontWeight: '800' },
 
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: COLORS.surface,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    padding: SPACING.lg,
-    ...SHADOWS.large,
-  },
   submitBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: SPACING.sm,
     backgroundColor: COLORS.primary,
     borderRadius: BORDER_RADIUS.lg,
-    paddingVertical: SPACING.md,
-    gap: SPACING.sm,
+    paddingVertical: SPACING.md + 2,
+    ...SHADOWS.medium,
   },
-  submitBtnDisabled: {
-    backgroundColor: COLORS.borderDark,
-  },
-  submitBtnText: {
-    ...TYPOGRAPHY.button,
-    color: COLORS.textOnDark,
+  submitBtnDisabled: { opacity: 0.45 },
+  submitBtnText: { ...TYPOGRAPHY.bodyMedium, color: COLORS.textOnDark, fontSize: 16 },
+
+  disclaimer: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+    textAlign: 'center',
+    marginTop: SPACING.lg,
+    lineHeight: 16,
   },
 });
 

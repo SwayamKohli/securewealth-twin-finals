@@ -3,6 +3,7 @@ import requests
 import re
 from typing import Dict, Any
 from ai.engines.phishing_engine import ScanResult
+from ai.engines.llm_source import tidy as _tidy
 
 # --- Deterministic Fallback Data ---
 GROUP_REASONING: Dict[str, str] = {
@@ -24,7 +25,7 @@ _DEFAULT_SCAM_INSTRUCTION = "Do not click any links or share private banking pas
 
 
 # --- 1. Local LLM Generator (Ollama) ---
-def generate_llm_explanation(result: ScanResult, model_name: str = "llama3:latest", timeout: float = 6.0) -> str:
+def generate_llm_explanation(result: ScanResult, model_name: str = "llama3:latest", timeout: float = 45.0) -> str:
     """
     Queries local Ollama framework instance using native JSON structure constraints.
     """
@@ -56,6 +57,7 @@ def generate_llm_explanation(result: ScanResult, model_name: str = "llama3:lates
             "prompt": prompt_context,
             "system": system_prompt,
             "stream": False,
+        "keep_alive": "30m",
             "format": "json"  # Enforces structural JSON constraints at the engine layer
         },
         timeout=timeout 
@@ -74,11 +76,11 @@ def generate_llm_explanation(result: ScanResult, model_name: str = "llama3:lates
         
         # DEFENSIVE PAYLOAD RECOVERY: If JSON is valid but key name shifted
         if "explanation" in parsed_response:
-            explanation_text = parsed_response["explanation"].strip()
+            explanation_text = _tidy(parsed_response["explanation"])
         else:
             # Dynamically pull the first string element available in the dictionary keys
             string_values = [str(v) for v in parsed_response.values() if isinstance(v, str)]
-            explanation_text = string_values[0].strip() if string_values else ""
+            explanation_text = _tidy(string_values[0]) if string_values else ""
             
         # If the extracted string is invalid or completely empty, throw to activate fallback pathing
         if not explanation_text or len(explanation_text) < 15:
@@ -109,7 +111,7 @@ def generate_fallback_explanation(result: ScanResult) -> str:
 # --- 3. Main Orchestrator ---
 def get_phishing_explanation(result: ScanResult) -> dict:
     try:
-        explanation = generate_llm_explanation(result, timeout=6.0)
+        explanation = generate_llm_explanation(result)
         source = "LLM"
     except Exception as e:
         # Programmatic protection fallback loop triggered safely without breaking response dictionary layouts
