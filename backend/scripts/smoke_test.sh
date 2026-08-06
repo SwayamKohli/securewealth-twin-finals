@@ -76,13 +76,19 @@ R4=$(call GET /api/v1/aggregation/net-worth)
 # ── 3. Pick a real Savings account ─────────────────────────────────────────
 head_ "3. Accounts"
 R5=$(call GET /api/v1/accounts/)
+# Highest-balance savings account, not simply the first one returned.
+# Swayam holds two, and the API does not promise an order. Picking the smaller
+# (₹120,000) account silently shrinks the escalation amount and then fails
+# section 7b on insufficient funds — which reads as a product bug and is not.
 ACC=$(body "$R5" | python3 -c "
 import sys,json
 a=[x for x in json.load(sys.stdin) if str(x['account_type']).upper()=='SAVINGS']
+a.sort(key=lambda x: float(x['balance']), reverse=True)
 print(a[0]['account_id'] if a else '')" 2>/dev/null)
 BAL0=$(body "$R5" | python3 -c "
 import sys,json
 a=[x for x in json.load(sys.stdin) if str(x['account_type']).upper()=='SAVINGS']
+a.sort(key=lambda x: float(x['balance']), reverse=True)
 print(a[0]['balance'] if a else 0)" 2>/dev/null)
 if [ -n "$ACC" ]; then ok "Savings account $ACC (balance ₹$BAL0)"
 else bad "No Savings account found — seed the demo user first"; exit 1; fi
@@ -302,8 +308,24 @@ NREC=$(body "$RA" | python3 -c "import sys,json;print(len(json.load(sys.stdin)))
                        || bad "Expected ≥2 audit records, found ${NREC:-0}"
 RI=$(call GET /api/v1/audit/integrity)
 VALID=$(body "$RI" | jget "['hash_chain_valid']"); INV=$(body "$RI" | jget "['signatures_invalid']")
-[ "$VALID" = "True" ] && [ "${INV:-1}" = "0" ] && ok "Chain intact — hashes and signatures verified" \
-                       || bad "Integrity check failed (valid=$VALID invalid_sigs=$INV)"
+if [ "$VALID" = "True" ] && [ "${INV:-1}" = "0" ]; then
+  ok "Chain intact — hashes and signatures verified"
+else
+  bad "Integrity check failed (valid=$VALID invalid_sigs=$INV)"
+  # Distinguish the two cases, because they mean opposite things.
+  if [ "${INV:-1}" = "0" ]; then
+    echo "${Y}    Signatures are all VALID but the chain does not link up, which"
+    echo "    means records were removed rather than altered. Almost always"
+    echo "    leftover damage from a previous red-team run — audit_tamper_persist"
+    echo "    breaks the chain deliberately and does not heal it."
+    echo "    Fix: run the Full Integrity Sweep scenario, or re-seed with"
+    echo "         python scripts/seed_personas.py --reset-audit${N}"
+  else
+    echo "${R}    ${INV} signature(s) failed. Content was altered, not just removed."
+    echo "    This is the case the audit design exists to catch — investigate"
+    echo "    before demonstrating anything.${N}"
+  fi
+fi
 
 RM=$(call GET /api/v1/security/my-activity)
 NACT=$(body "$RM" | jget "['count']")

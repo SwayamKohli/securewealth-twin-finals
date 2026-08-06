@@ -234,34 +234,115 @@ class RedTeamService:
 
     # ── helpers ────────────────────────────────────────────────────────────
 
+    # The persona every fraud scenario is written against. Swayam has a dense,
+    # consistent investment history, which is what gives "25x normal" a real
+    # meaning.
+    DEMO_CUSTOMER_ID = "SW10000001"
+
     def _demo_user(self):
         from models.user import User
 
+        # Target the seeded persona explicitly.
+        #
+        # This used to take the OLDEST customer with a customer_id, on the
+        # assumption that was the demo user. It is not: frontend_test.sh
+        # registers a throwaway customer on every run and never removes it, and
+        # seed_personas deletes and RECREATES the personas — so after a reseed
+        # every leftover contract-test account is older than Swayam and won a
+        # sort by created_at.
+        #
+        # The scenarios were then attacking an account with almost no history
+        # and a nearly empty balance. "25x the customer's normal size" computed
+        # from four throwaway transactions is not an outlier, so the pipeline
+        # correctly ALLOWED it and the dashboard reported the attack as
+        # BREACHED. The system was right; the target was wrong.
         user = (
             self.db.query(User)
-            .filter(User.customer_id.isnot(None))
-            .order_by(User.created_at.asc())
+            .filter(User.customer_id == self.DEMO_CUSTOMER_ID)
             .first()
         )
         if user is None:
-            raise RuntimeError("No customer exists. Run scripts/seed_demo.py first.")
+            # Fall back to the NEWEST customer rather than the oldest: after a
+            # reseed the personas are the most recent rows, so this at least
+            # lands on real seeded data instead of test residue.
+            user = (
+                self.db.query(User)
+                .filter(User.customer_id.isnot(None))
+                .order_by(User.created_at.desc())
+                .first()
+            )
+        if user is None:
+            raise RuntimeError(
+                "No customer exists. Run: python scripts/seed_personas.py --reset-audit"
+            )
         return user
 
     def _savings_account(self, user):
         from models.account import Account
         from models.enums import AccountType
 
+        # Highest balance, not "whichever row comes back first". Swayam holds
+        # two savings accounts; an unordered .first() could hand back the
+        # smaller one, and the attack amount is capped at the balance — so the
+        # scenario silently shrank into something that was not an outlier.
         acc = (
             self.db.query(Account)
             .filter(
                 Account.user_id == user.user_id,
                 Account.account_type == AccountType.SAVINGS,
             )
+            .order_by(Account.balance.desc())
             .first()
         )
         if acc is None:
             raise RuntimeError("Customer has no Savings account. Re-run the seed script.")
         return acc
+
+    def _latest_audit_record(self, create_if_missing: bool = True):
+        """
+        The most recent security audit record, creating one if the chain is
+        empty.
+
+        The audit-tamper scenarios need something to tamper with. They used to
+        fail outright on an empty chain, telling the operator to "run a fraud
+        scenario first" — which made the suite order-dependent in a way nothing
+        enforced. Reseeding with --reset-audit wipes the chain, so running the
+        dashboard suite straight afterwards reported four scenarios as BREACHED
+        when nothing was actually wrong.
+
+        A scenario that needs a record can just make one: a small investment
+        through the live pipeline writes a genuine, signed, replicated record.
+        """
+        from models.audit import AuditLog
+
+        def _newest():
+            return (
+                self.db.query(AuditLog)
+                .filter(AuditLog.event_type == "TRANSACTION_SECURITY")
+                .order_by(AuditLog.created_at.desc())
+                .first()
+            )
+
+        record = _newest()
+        if record is not None or not create_if_missing:
+            return record
+
+        self._step(
+            "Seed the chain", "INFO",
+            "The audit chain is empty, so there is nothing to tamper with yet. "
+            "Running one ordinary investment through the live pipeline to create "
+            "a real, signed record first.",
+        )
+        try:
+            user = self._demo_user()
+            account = self._savings_account(user)
+            self._invest(user, account, 2000.0)
+            self.db.commit()
+        except Exception as exc:
+            self._step("Seed the chain", "FAIL",
+                       f"Could not create an audit record to attack: {exc}")
+            return None
+        return _newest()
 
     def _invest(self, user, account, amount: float, fund: str = "Bluechip Equity Fund SIP"):
         from schemas.transaction_schema import InitiateTransactionRequest
@@ -285,17 +366,12 @@ class RedTeamService:
         from models.audit import AuditLog
         from models.audit_replica import AuditReplica1
 
-        record = (
-            self.db.query(AuditLog)
-            .filter(AuditLog.event_type == "TRANSACTION_SECURITY")
-            .order_by(AuditLog.created_at.desc())
-            .first()
-        )
+        record = self._latest_audit_record()
         if record is None:
             self._step(
                 "Locate target record", "FAIL",
-                "No audit records exist yet. Run a fraud scenario first so there "
-                "is something to tamper with.",
+                "No audit record could be created to attack. Re-seed with "
+                "scripts/seed_personas.py and try again.",
             )
             return
 
@@ -424,15 +500,10 @@ class RedTeamService:
         from models.audit import AuditLog
         from models.audit_replica import AuditReplica1, AuditReplica2, AuditReplica3
 
-        record = (
-            self.db.query(AuditLog)
-            .filter(AuditLog.event_type == "TRANSACTION_SECURITY")
-            .order_by(AuditLog.created_at.desc())
-            .first()
-        )
+        record = self._latest_audit_record()
         if record is None:
             self._step("Locate target record", "FAIL",
-                       "No audit records exist yet. Run a fraud scenario first.")
+                       "No audit record could be created to attack. Re-seed and retry.")
             return
 
         audit_id = record.audit_id
@@ -573,14 +644,28 @@ class RedTeamService:
 
         user = self._demo_user()
         account = self._savings_account(user)
+        # Investments only. The seeder now writes a real expense side — salary
+        # credits and negative spending debits — so an unfiltered "last 20
+        # transactions" median is computed over rent and groceries, and can
+        # even come out NEGATIVE. The attack amount is derived from this, so a
+        # wrong median produces an attack that is not an outlier at all.
+        #
+        # This mirrors what the fraud engine itself considers a baseline.
+        from schemas.transaction_schema import APPROVED_FUND_CATEGORIES
+
         recent = (
             self.db.query(Transaction)
             .filter(Transaction.user_id == user.user_id)
             .order_by(Transaction.transaction_time.desc())
-            .limit(20)
+            .limit(60)
             .all()
         )
-        amounts = sorted(float(t.amount) for t in recent) or [3000.0]
+        amounts = sorted(
+            float(t.amount)
+            for t in recent
+            if float(t.amount) > 0
+            and str(t.merchant_category or "").strip().upper() in APPROVED_FUND_CATEGORIES
+        ) or [3000.0]
         median = amounts[len(amounts) // 2]
         attack_amount = round(median * 25, -2)
 
@@ -590,6 +675,16 @@ class RedTeamService:
             f"The attacker will attempt ₹{attack_amount:,.0f} — roughly 25x normal.",
         )
         balance_before = float(account.balance)
+        if attack_amount > balance_before:
+            # Capping is honest, but it can turn a 25x outlier into something
+            # ordinary. Say so rather than letting the result look like a
+            # failed detection.
+            self._step(
+                "Attack capped by balance", "INFO",
+                f"The account holds ₹{balance_before:,.0f}, less than the intended "
+                f"₹{attack_amount:,.0f}. The attempt is capped — re-seed with "
+                "scripts/seed_personas.py to restore full balances.",
+            )
 
         res = self._invest(user, account, min(attack_amount, balance_before))
         decision = res.decision or "UNKNOWN"
