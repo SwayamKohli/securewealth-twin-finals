@@ -89,13 +89,16 @@ const ProfileScreen = ({ handleLogout }: { handleLogout?: () => void }) => {
           user_profile: {
             full_name: s.status === 'fulfilled' ? s.value.full_name : '',
           },
+          language,
         })
         .then((res) => setTrustMessage(res?.customer_message || null))
         .catch(() => setTrustMessage(null));
     }
     setLoading(false);
     setRefreshing(false);
-  }, []);
+    // The device-trust message is generated per language, so switching it must
+    // refetch rather than leave the previous language's sentence on screen.
+  }, [language]);
 
   useEffect(() => {
     load();

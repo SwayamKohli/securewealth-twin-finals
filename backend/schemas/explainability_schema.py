@@ -39,6 +39,7 @@ class DecisionExplanationResponse(BaseModel):
 class DeviceTrustExplanationRequest(BaseModel):
     trust_result: Dict[str, Any] = Field(..., description="Device trust result to explain")
     user_profile: Dict[str, Any] = Field(..., description="User profile for personalization")
+    language: Optional[str] = Field("en", description="Output language: en | hi | pa")
 
 
 class DeviceTrustExplanationResponse(BaseModel):
@@ -72,6 +73,9 @@ class UnknownRiskExplanationResponse(BaseModel):
 class WealthExplanationRequest(BaseModel):
     wealth_result: Dict[str, Any] = Field(..., description="Wealth engine result to explain")
     profile: Dict[str, Any] = Field(..., description="User profile for context")
+    # Was missing entirely, so switching the app to Hindi or Punjabi translated
+    # every label but left the actual advice in English.
+    language: Optional[str] = Field("en", description="Output language: en | hi | pa")
 
 
 class WealthExplanationResponse(BaseModel):

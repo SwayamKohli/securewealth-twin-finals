@@ -149,6 +149,21 @@ def explain_device_trust(
     try:
         explainer = DeviceTrustExplainer()
         result = explainer.explain(request.trust_result, request.user_profile)
+
+        # Localise the customer-facing sentence. The status vocabulary is
+        # fixed, so a catalog lookup is deterministic and cannot drift the way
+        # an LLM translation would.
+        if request.language in ("hi", "pa"):
+            from ai.engines.i18n_catalog import narrative
+
+            status = str(result.get("device_status") or request.trust_result.get("device_status") or "").upper()
+            localized = narrative("device_trust", status, request.language)
+            if localized:
+                result = {
+                    **result,
+                    "customer_message": localized,
+                    "generated_by": "TEMPLATE_" + request.language.upper(),
+                }
         return DeviceTrustExplanationResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -202,6 +217,43 @@ def explain_wealth_recommendations(
     try:
         explainer = RecommendationExplainer()
         result = explainer.explain(request.wealth_result, request.profile)
+
+        # Localise each recommendation's explanation.
+        #
+        # Only the per-recommendation text is swapped: those are the sentences
+        # the customer reads to decide, and each maps to a stable
+        # recommendation_id. Ids carrying a dynamic suffix (ffd_reinvest_<id>)
+        # are matched on their prefix. Anything without a catalog entry is left
+        # in English rather than shown as a gap.
+        if request.language in ("hi", "pa"):
+            from ai.engines.i18n_catalog import narrative
+
+            def _localise(rec_id: str) -> str | None:
+                # Try the full id, then progressively shorter prefixes, so
+                # "ffd_reinvest_9f2c" resolves via "ffd_reinvest".
+                parts = [p for p in str(rec_id).split("_") if p]
+                for n in range(len(parts), 0, -1):
+                    hit = narrative("wealth", "_".join(parts[:n]), request.language)
+                    if hit:
+                        return hit
+                return None
+
+            translated = 0
+            explanations = []
+            for item in result.get("recommendation_explanations") or []:
+                entry = dict(item)
+                localized = _localise(str(entry.get("recommendation_id") or ""))
+                if localized:
+                    entry["explanation"] = localized
+                    translated += 1
+                explanations.append(entry)
+
+            if translated:
+                result = {
+                    **result,
+                    "recommendation_explanations": explanations,
+                    "generated_by": "TEMPLATE_" + request.language.upper(),
+                }
         return WealthExplanationResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

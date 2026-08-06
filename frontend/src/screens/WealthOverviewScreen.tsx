@@ -450,7 +450,7 @@ const HealthCard = ({ health }: { health: Record<string, any> | null }) => {
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 const WealthOverviewScreen = ({ navigation }: any) => {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [loading, setLoading] = useState(true);
   // Task 2.1 — aggregated endpoints sit behind `require_aa_consent`. null =
   // not yet known, false = show the consent gate instead of an error.
@@ -528,6 +528,9 @@ const WealthOverviewScreen = ({ navigation }: any) => {
           .explainWealth({
             wealth_result: recRes as unknown as Record<string, unknown>,
             profile: profileData,
+            // Without this the advice paragraph stays in English while every
+            // label around it is translated.
+            language,
           })
           .then((exp) => {
             const map: Record<string, string> = {};
@@ -566,7 +569,10 @@ const WealthOverviewScreen = ({ navigation }: any) => {
           : 'Could not load your wealth data. Pull down to try again.';
       setError(msg);
     }
-  }, []);
+  // language included on purpose: the AI explanations are generated per
+  // language, so switching it must refetch them rather than reuse the cached
+  // English text.
+  }, [language]);
 
   useEffect(() => {
     (async () => {

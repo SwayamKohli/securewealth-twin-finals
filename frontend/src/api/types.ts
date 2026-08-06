@@ -498,6 +498,8 @@ export interface ExplainPhishingResponse {
 }
 // ── Device Trust Explainability (was built on the backend, never called) ──
 export interface ExplainDeviceTrustRequest {
+  /** Output language: en | hi | pa. */
+  language?: string;
   trust_result: Record<string, unknown>;
   user_profile: Record<string, unknown>;
 }
@@ -536,6 +538,9 @@ export interface ExplainRiskRequest {
   ollama_url?: string;
 }
 export interface ExplainWealthRequest {
+  /** Output language: en | hi | pa. Without this the advice stays English
+   *  even when the rest of the app is translated. */
+  language?: string;
   wealth_result: Record<string, unknown>;
   profile: Record<string, unknown>;
 }
