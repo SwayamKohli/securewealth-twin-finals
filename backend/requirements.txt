@@ -43,3 +43,13 @@ uvicorn==0.49.0
 # If this is absent the pipeline falls back to StatisticalZeroDayDetector,
 # so the app still starts; it just uses the numpy detector instead.
 torch>=2.2,<3
+
+# Fraud classifier (ai/engines/fraud_engine.py).
+# No module imports these by name, which is why they were missing here — the
+# model is loaded with joblib/pickle, and unpickling a saved XGBoost booster
+# and an sklearn StandardScaler REQUIRES both packages to be importable.
+# Without them a clean `pip install -r requirements.txt` starts the server but
+# the fraud model never loads, and the pipeline silently degrades to rules-only
+# scoring. Pin these to whatever the working venv reports before submitting.
+xgboost>=2.0,<4
+scikit-learn>=1.4,<2
