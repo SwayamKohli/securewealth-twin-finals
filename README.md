@@ -1,147 +1,271 @@
 # SecureWealth Twin
 
-**Wealth First. Security Always.**
+**Intelligent Wealth Growth with Built-in Fraud Protection**  
+*Wealth First. Security Always.*
 
-An AI-powered wealth-first banking platform that combines consent-based account
-aggregation, intelligent wealth guidance, and adaptive fraud protection — with
-an immutable, self-healing audit trail as its core differentiator.
+[![Punjab & Sind Bank Hackathon 2026 Finalist](https://img.shields.io/badge/PSB%20Hackathon%202026-Finalist-006837.svg)](https://punjabandsindbank.co.in)
+[![Domain](https://img.shields.io/badge/Domain-AI%20%C3%97%20Cybersecurity-purple.svg)](#the-security-growth-paradox)
+[![Backend](https://img.shields.io/badge/Backend-FastAPI%20%7C%20PostgreSQL-blue.svg)](https://fastapi.tiangolo.com/)
+[![Mobile](https://img.shields.io/badge/Mobile-React%20Native%20%7C%20Expo-000000.svg)](https://expo.dev)
+[![AI/ML](https://img.shields.io/badge/AI%2FML-PyTorch%20%7C%20XGBoost%20%7C%20Ollama-orange.svg)](https://pytorch.org/)
+[![Audit & Crypto](https://img.shields.io/badge/Cybersecurity-Ed25519%20%7C%20SHA--256%20Chain-green.svg)](https://ed25519.cr.yp.to/)
+[![Languages](https://img.shields.io/badge/Languages-English%20%7C%20हिन्दी%20%7C%20ਪੰਜਾਬੀ-gold.svg)](#multilingual-plain-language-explainability)
+[![License: All Rights Reserved](https://img.shields.io/badge/License-All%20Rights%20Reserved-red.svg)](LICENSE)
 
----
-
-## Architecture
-
-```
-                        ┌──────────────────────────┐
-   Mobile App (Expo)    │   Admin Dashboard (Web)  │
-   Wealth-first UX      │   Audit • Live Fraud     │
-        │               └───────────┬──────────────┘
-        │  JWT                      │  X-Admin-Key
-        └───────────┬───────────────┘
-                    ▼
-             FastAPI Backend
-                    │
-  ┌─────────────────┼──────────────────────┐
-  │                 │                      │
-Wealth AI     Security Pipeline      Audit Engine
-(profile →    (Behavior → Fraud ML   (hash chain +
- wealth       → Zero-Day → Risk      RSA signature
- engine)      → Decision)             + 3 replicas)
-                    │                      │
-                    └──────► ALLOW / WARN / CHALLENGE / BLOCK
-                                           │
-                                    one immutable
-                                    audit record
-```
-
-**Key principle:** the frontend never calls AI modules directly. One call to
-`POST /api/v1/transactions/initiate` runs the entire security pipeline server
-side, writes the audit record, and returns the decision.
+SecureWealth Twin is a unified **AI × Cybersecurity** banking platform engineered for the **Punjab & Sind Bank (PSB) Hackathon 2026 Finals**. It operates as the customer’s virtual financial twin — bridging personalized, consent-driven wealth guidance with an active, behavioral **Cyber-Protection Layer** and an **immutable, self-healing Master-Replica audit engine** that protects assets before any money moves.
 
 ---
 
-## Setup
+## Core Engineering Team & Leadership
 
-### 1. Backend
+The end-to-end architecture, technical implementation, cybersecurity pipeline, mobile experience, and AI models of SecureWealth Twin were **mostly done and driven by the following core members**:
+
+| Member | Role | Core Engineering Ownership |
+|---|---|---|
+| **[Swayam Kohli](https://github.com/SwayamKohli)** | **Team Lead — AI & Cybersecurity Systems Architect** | Led overall system design, cybersecurity defense integration, and cross-layer technical orchestration; engineered the entire mobile application from scratch (14 production screens, trilingual i18n system across 260 keys, focus-based navigation, resilient timeout recovery); integrated the 5-stage behavioral cyber-protection pipeline into the live transaction lifecycle; diagnosed and resolved complex cash-flow and data pipeline calculation defects; authored end-to-end automated verification suites and red-team attack simulators. |
+| **[Mahak Singh](https://github.com/Mahak0205)** | **Backend & Distributed Systems Engineer** | Implemented the Master-Replica distributed audit database architecture and consensus-based replication framework; built core database ORM models and repository abstractions; authored foundational security and audit API schemas, migrations, and backend service orchestration. |
+| **[Ayush](https://github.com/Kaizoku-Ayush)** | **AI / Machine Learning Lead** | Researched, trained, and evaluated the machine learning fraud detection models with behavioral feature engineering and SHAP attribution; developed the ethical wealth intelligence engine (budgeting rules, emergency reserve models, debt-to-income checks, and fraud gating); engineered the unified financial profiling layer. |
+| **[Archit Sahay](https://github.com/arcfr)** | **AI Explainability & Local LLM Lead** | Designed and authored the 7 plain-language explainability engines converting complex security and wealth decisions into human-readable text; integrated offline local LLM inference with deterministic fallback templates; created multilingual prompt systems and the SMS phishing intelligence module. |
+
+---
+
+## The Problem Statement & The Security-Growth Paradox
+
+Modern Public Sector Banks face a critical dual mandate: empowering customers to grow their wealth through digital advisory while actively safeguarding those assets against sophisticated cyber threats.
+
+SecureWealth Twin was built to solve the **four core challenges** outlined in the PSB problem statement:
+
+1. **The Security-Growth Paradox:** Traditional security measures (hard blocks, repetitive SMS OTPs) cause friction that alienates wealth management users. Conversely, frictionless experiences expose users to social engineering, coerced transfers, and impulsive scams.  
+   *$\rightarrow$ SecureWealth Twin resolves this with an **adaptive, risk-weighted step-up challenge matrix**: routine transactions remain frictionless (`ALLOW`), while suspicious spikes trigger contextual verification (`CHALLENGE`).*
+2. **Fragmented Financial Visibility:** Customers hold scattered assets across multiple institutions, blinding advisory engines.  
+   *$\rightarrow$ Solved via **consent-gated Account Aggregator integration** providing a unified view of net worth, cash flow, liquidity ratios, and liabilities.*
+3. **Sophisticated Behavioral Fraud Vectors:** Modern attacks are rarely just brute force; fraudsters use behavioral coercion (e.g. phone-coached fund transfers, nocturnal drain attempts, rapid velocity bursts).  
+   *$\rightarrow$ Solved via an **in-line 5-stage cyber-pipeline** combining behavioral telemetry, XGBoost classification, and PyTorch autoencoder novelty detection.*
+4. **The "Black Box" Explainability Gap:** Regulators and customers distrust opaque AI.  
+   *$\rightarrow$ Solved via **7 locally hosted explainability engines** translating decisions into transparent, plain-language justifications in English, Hindi, and Punjabi with anti-hallucination guardrails.*
+
+---
+
+## Architecture Overview
+
+```
+                         ┌──────────────────────────┐
+    Mobile App (Expo)    │   Admin Dashboard (Web)  │
+    Wealth-first UX      │   Audit • Red Team Suite │
+         │               └───────────┬──────────────┘
+         │  JWT                      │  X-Admin-Key
+         └───────────┬───────────────┘
+                     ▼
+              FastAPI Backend (90 route handlers)
+                     │
+   ┌─────────────────┼────────────────────────────────┐
+   │                 │                                │
+Wealth Engine   Security Pipeline               Audit Engine
+(Profile ->     (Behavior -> Fraud ML ->       (Master + 3 Replicas
+ Wealth Advice)  Zero-Day -> Risk -> Decision)  Hash Chain + Ed25519)
+                     │                                │
+                     └──────► ALLOW / WARN /          │
+                              CHALLENGE / BLOCK       │
+                                     │                │
+                              One Immutable, Self-Healing Audit Record
+```
+
+**Architectural Principle:** The frontend never orchestrates security or AI calls directly. A single call executes the five-stage cyber-pipeline server-side, signs and writes the audit record across all replicas, and returns the verdict.
+
+---
+
+## Core Differentiator: Byzantine-Resilient Master-Replica Audit Trail
+
+Traditional banking audit trails are designed against external attacks or data loss (e.g. keeping backups). **They fail against the realistic threat: a privileged insider** (a malicious DBA or compromised admin) who issues a direct SQL update to cover up fraud:
+
+```sql
+UPDATE audit_logs SET final_decision = 'ALLOW', risk_score = 1 WHERE transaction_id = '...';
+```
+
+In typical master-slave replication, the corrupted master simply overwrites the slaves, permanently erasing the evidence. SecureWealth Twin flips this power dynamic:
+
+```
+                    ┌─────────────────────────┐
+                    │ Transaction Decision    │
+                    └───────────┬─────────────┘
+                                │ SHA-256 Hash Chaining + Ed25519 Digital Signing
+                                ▼
+         ┌──────────────────────┼──────────────────────┐
+         ▼                      ▼                      ▼
+   Master Table             Replica 1              Replica 2              Replica 3
+   (`audit_logs`)     (`audit_replica_1`)    (`audit_replica_2`)    (`audit_replica_3`)
+         │                      │                      │                      │
+         └──────────────────────┼──────────────────────┼──────────────────────┘
+                                ▼
+                     `ReplicaVerifier`
+                 (Equal Voters + Crypto Authority)
+                                │
+               Tamper Detected in Master or Replicas?
+                                ▼
+                     `RecoveryService`
+                 (Autonomous Self-Healing)
+                                │
+          Replicas Vote Out & OVERWRITE the Corrupted Master!
+```
+
+### Key Pillars of the Audit Engine
+
+1. **4-Way Lockstep Replication:** Every transaction decision writes synchronously to the primary master table and three distinct physical replica tables.
+2. **Cryptographic Chaining:** Each record stores a cryptographic hash linking it to its predecessor (`previous_hash`). Modifying any historical record invalidates every downstream link in the chain.
+3. **Inversion of Authority:** The verifier does not assume the Master is correct. All 4 copies are treated as equal voters. If an insider modifies the Master, the 3 untouched replicas out-vote it 3-to-1, flagging the Master as corrupted.
+4. **Cryptographic Authority Trumps Head-Count ("Test D"):** If an attacker modifies 3 of the 4 copies to the same forged value, naive majority voting fails. SecureWealth Twin signs every record with an asymmetric **Ed25519 private key** stored outside the database. Forged copies fail cryptographic verification regardless of how many exist; **a single signature-valid copy outranks any number of agreeing forgeries.**
+5. **Autonomous Self-Healing:** The recovery service automatically replaces the corrupted Master or Replica row using the verified pristine copy.
+6. **Tamper Auditing:** The detection and the repair are appended as new, digitally signed events into the audit chain, ensuring the audit trail survives its own fix.
+
+---
+
+## 5-Stage Real-Time Cyber-Protection Pipeline
+
+Every investment passes through an ordered chain of independent evaluators before any money moves:
+
+1. **Behavior Engine:** Evaluates velocity bursts, amount deviations against personal 30-day baselines, and nocturnal transaction flags (11 PM – 5 AM IST).
+2. **Fraud ML Engine:** An XGBoost gradient-boosted classifier evaluated on 22 engineered behavioural features, producing fraud probabilities with SHAP attribution.
+3. **Zero-Day Novelty Detector:** An 8 KB PyTorch autoencoder trained on normal user embedding distributions to detect unseen attack vectors via reconstruction loss.
+4. **Risk Engine:** Fuses ML scores, behavioural flags, hardware trust (120-day fingerprint, jailbreak/root checks), and SIM indicators into a composite 0–100 risk score.
+5. **Decision Engine:** Enforces deterministic decision bands:
+   - **`ALLOW` (Score < 35):** Silent approval for routine investments.
+   - **`WARN` (Score 35–54):** In-app cautionary prompt.
+   - **`CHALLENGE` (Score 55–79):** Contextual step-up verification.
+   - **`BLOCK` (Score ≥ 80):** Immediate cancellation; zero funds debited.
+
+### Adaptive Challenge Matrix
+
+| Trigger | Challenge Plan |
+|---|---|
+| Unknown / Unregistered Device | Security Question $\rightarrow$ OTP |
+| Large Amount Deviation | MPIN $\rightarrow$ OTP |
+| High Velocity / Distress Signal | OTP Re-confirmation |
+| Nocturnal / Unusual Timing | Acknowledge $\rightarrow$ MPIN |
+
+*Three failed attempts cancel the transaction. If the customer reports fraud ("This wasn't me"), the system records a `CUSTOMER_REPORTED_FRAUD` audit event and freezes the session.*
+
+---
+
+## Ethical Wealth Intelligence
+
+Built strictly around customer financial well-being rather than product sales commissions:
+- **No Speculative Assets:** Whitelist strictly limited to vetted Mutual Fund categories (Liquid, Debt, Index, Large Cap, Balanced). Absolutely no stock tips, intraday trading, or guaranteed return claims.
+- **Empirical Financial Frameworks:** Enforces Virginia Tech 4-month emergency liquidity minimums, the 50/30/20 budgeting rule, and RBI Debt-to-Income (DTI) ceilings.
+- **Fraud-Gated Suppression:** If real-time fraud probability exceeds **0.70**, all wealth and investment recommendations are **fully suppressed** to protect compromised accounts.
+
+---
+
+## Multilingual Plain-Language Explainability
+
+Customers are never left with opaque error codes. Seven dedicated explanation engines translate raw model outputs into plain, actionable language:
+- **Engines:** Wealth Recommendations, Fraud Alerts, Decision Justifications, Challenge Demands, Unknown Risk Explanations, Device Trust Status, and Phishing Analysis.
+- **Runtime:** Locally hosted Llama 3 via Ollama with deterministic template fallbacks so the app never fails if the model is unreachable.
+- **Full Trilingual Parity:** Available across **English**, **हिन्दी (Hindi)**, and **ਪੰਜਾਬੀ (Punjabi)** with verified 260-key parity.
+- **Safety Guardrail:** The language model sits strictly outside the security-critical path and cannot alter transaction outcomes; an anti-contradiction guardrail automatically rejects explanations that disagree with the underlying engine verdict.
+
+---
+
+## System Structure
+
+```
+securewealth-twin/
+├── backend/
+│   ├── ai/                    # XGBoost fraud engine, PyTorch zero-day detector, LLM explainers
+│   ├── aggregation/           # Consent-based Account Aggregator service & net worth calculators
+│   ├── api/                   # 90 FastAPI route endpoints (auth, accounts, wealth, audit, security)
+│   ├── audit/                 # Hash chaining, Ed25519 signing, replica consensus & self-healing
+│   ├── core/                  # Configuration, security dependencies, custom exceptions, logging
+│   ├── database/              # PostgreSQL connection & repository patterns
+│   ├── keys/                  # Ed25519 keypair for cryptographic audit signing
+│   ├── models/                # SQLAlchemy ORM models (AuditLog, AuditReplica, Transaction, User)
+│   ├── schemas/               # Pydantic v2 validation contracts
+│   ├── scripts/               # Attack simulator, smoke tests, seeding, key generation
+│   ├── security/              # Risk engine, behavior rules, challenge engine, decision engine
+│   └── services/              # Pipeline orchestration, transaction management, red team engine
+├── frontend/                  # React Native / Expo client (14 screens, trilingual i18n, accessible)
+├── admin-dashboard/           # Standalone Web Console (Punjab & Sind Bank palette, Red Team suite)
+└── demo/                      # Architecture blueprints, video script, reference deck
+```
+
+---
+
+## Quickstart Setup
+
+### 1. Backend Service
 
 ```bash
 cd backend
-python -m venv venv && source venv/bin/activate      # Windows: venv\Scripts\activate
+python -m venv venv && source venv/bin/activate       # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-alembic upgrade head                                  # applies all migrations
-python scripts/seed_demo.py --reset-audit             # demo world + clean audit chain
+# Copy environment configuration
+cp .env.example .env
 
-uvicorn main:app --reload                             # http://127.0.0.1:8000/docs
+# Apply database migrations & seed demo dataset
+alembic upgrade head
+python scripts/seed_demo.py --reset-audit
+
+# Launch FastAPI server
+uvicorn main:app --reload
 ```
+API Documentation will be live at `http://127.0.0.1:8000/docs`.
 
-**Demo credentials** — SecureWealth ID `SW10000001` / MPIN `123456`
+**Demo Credentials:**
+- SecureWealth ID: `SW10000001`
+- MPIN: `123456`
+*(Seed includes ₹3,70,000 in savings, ₹3,00,000 FD, home loan, 120-day trusted device, behavioral profile, and 10 baseline SIP records).*
 
-The seed creates: 2 Savings accounts (₹2,50,000 + ₹1,20,000), FD ₹3,00,000,
-RD ₹60,000, home loan ₹12,00,000, a trusted 120-day-old device, a behavioural
-profile, and ~10 SIP investments over the last 30 days (the fraud engine's
-baseline). `--reset-audit` wipes any broken audit chain from earlier runs.
+### 2. Admin Dashboard (Web)
 
-### 2. Mobile App
+```bash
+cd admin-dashboard
+python -m http.server 3001
+```
+Open `http://localhost:3001` in your browser.  
+Default Admin Key: `securewealth-admin-2026`.
+
+### 3. Mobile App (Expo / React Native)
 
 ```bash
 cd frontend
 npm install
-# set your machine's LAN IP in src/api/config.ts (API_BASE_URL)
+
+# Configure API host in src/api/config.ts to your local server
 npx expo start
 ```
 
-### 3. Admin Dashboard (standalone web app)
+---
+
+## Verification & Adversarial Testing
+
+SecureWealth Twin was tested against automated contract suites and 10 live red-team attack scenarios:
 
 ```bash
-cd admin-dashboard
-python -m http.server 3001      # then open http://localhost:3001
-```
-Default admin key: `securewealth-admin-2026` (change via `ADMIN_API_KEY` in `.env`).
+cd backend
 
----
+# Run the complete backend integration journey
+bash scripts/smoke_test.sh
 
-## Authentication
+# Run the multi-phase audit tamper & self-healing verification suite (34/34 tests)
+python scripts/audit_phase_test.py
 
-Login uses a bank-grade **SecureWealth ID** (CIF-style, e.g. `SW10000001`),
-issued once at registration. Phone-number login has been removed. The accepted
-identifier type is configurable:
+# Execute a live insider attack on the database
+python scripts/attack_sim.py --target master
 
-```env
-LOGIN_METHODS=CUSTOMER_ID        # default; supports CUSTOMER_ID, PHONE
+# Run the Admin Dashboard & Red Team test harness
+bash scripts/dashboard_test.sh
 ```
 
----
-
-## Feature Map
-
-| Feature | Where |
-|---|---|
-| Consent-based aggregation | `GET/POST/DELETE /api/v1/aggregation/consent` — data endpoints 403 until consent |
-| Unified wealth dashboard + Net Worth | Wealth tab · `wealth_position` in wealth API responses |
-| Wealth AI (MF-only, expense-aware, fraud-gated) | `ai/engines/wealth_engine.py` |
-| Investment-only workflow | Savings → Mutual Fund; `fund_name` / `fund_category`, MF whitelist |
-| Real-time fraud detection | `services/security/security_pipeline.py` |
-| Adaptive security | ALLOW / WARN / CHALLENGE / BLOCK |
-| Challenge flow | `POST /api/v1/security/challenge/{txn}/start` and `/verify` |
-| Immutable audit | one record per investment; hash chain + RSA signature + 3 replicas |
-| Admin APIs | `/api/v1/admin/stats · /audit · /alerts · /investments` |
-| SMS phishing auto-scan | Phishing tab — consent → auto scan → explained alerts |
-| Multilingual | English / हिन्दी / ਪੰਜਾਬੀ — Profile tab switcher + `language` on explainability APIs |
-
-### Adaptive challenge plans
-
-| Trigger | Steps required |
-|---|---|
-| Unknown device | Security question → OTP |
-| Large amount spike | MPIN → OTP |
-| OTP-distress signal | OTP re-confirmation |
-| Unusual time / pattern | Acknowledge → MPIN |
-
-OTP is never shown unless the risk actually calls for it. Three failed attempts
-cancels the investment. Held investments debit nothing until verification passes.
+Frontend verification:
+```bash
+node frontend/scripts/i18n_check.js     # 260 keys verified across EN, HI, PA
+node frontend/scripts/a11y_check.js     # 100% accessible icon-only controls
+```
 
 ---
 
-## Demo Journey
+## License & Intellectual Property
 
-1. **Login** — `SW10000001` / `123456` → lands directly on the Wealth Dashboard.
-2. **Wealth** — Net Worth, assets vs liabilities, AI recommendations (mutual
-   fund categories only, never stocks).
-3. **Invest ₹4,000** in Bluechip Equity Fund SIP → **ALLOW**, silent approval.
-4. **Invest ₹95,000** → **CHALLENGE** → verification steps → investment completes.
-5. **Admin Dashboard** — the alert appears within 5 seconds; open the Audit Log
-   to show the hash-chained record, then click **Verify chain now** →
-   ✔ CHAIN INTACT.
-6. **Phishing tab** — grant consent → messages scan automatically → the fake-KYC
-   and lottery SMS flag as Suspicious with plain-language reasons; the genuine
-   OTP message shows "Never share this OTP with anyone."
-7. **Profile → हिन्दी / ਪੰਜਾਬੀ** — the app switches language live.
+**Copyright © 2026 Swayam Kohli. All rights reserved.**
 
----
-
-## Safety Properties
-
-- **Fail-safe, not fail-open** — a security pipeline error yields CHALLENGE, never a silent ALLOW.
-- **Graceful AI degradation** — missing ML artifacts log a warning and fall back to rule-based signals; the app never hard-fails.
-- **Audit never blocks the customer** — audit write failures are logged, the investment still completes.
-- **No stock recommendations** — an approved-product whitelist is enforced before every wealth response.
+This project was developed for the Punjab & Sind Bank (PSB) Hackathon 2026. This repository is published strictly for evaluation, recruiter review, and technical demonstration purposes. **No permission is granted to copy, reproduce, modify, distribute, sublicense, or use this codebase or its architecture for any commercial or non-commercial purposes without express written permission.**

@@ -15,7 +15,7 @@
  * Since your mobile device and backend server are on the same WiFi network (10.107.1.x),
  * use your computer's IP address to connect to the backend.
  */
-export const API_BASE_URL = 'http://10.104.7.97:8000';
+export const API_BASE_URL = 'http://192.168.1.21:8000';
 
 // Some endpoints in the API doc are NOT under /api/v1 (e.g. /dashboard/*).
 // We keep the raw host separately so those can be called too.
