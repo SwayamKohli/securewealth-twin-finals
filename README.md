@@ -36,13 +36,13 @@ Modern Public Sector Banks face a critical dual mandate: empowering customers to
 SecureWealth Twin was built to solve the **four core challenges** outlined in the PSB problem statement:
 
 1. **The Security-Growth Paradox:** Traditional security measures (hard blocks, repetitive SMS OTPs) cause friction that alienates wealth management users. Conversely, frictionless experiences expose users to social engineering, coerced transfers, and impulsive scams.  
-   *$\rightarrow$ SecureWealth Twin resolves this with an **adaptive, risk-weighted step-up challenge matrix**: routine transactions remain frictionless (`ALLOW`), while suspicious spikes trigger contextual verification (`CHALLENGE`).*
+   *→ SecureWealth Twin resolves this with an **adaptive, risk-weighted step-up challenge matrix**: routine transactions remain frictionless (`ALLOW`), while suspicious spikes trigger contextual verification (`CHALLENGE`).*
 2. **Fragmented Financial Visibility:** Customers hold scattered assets across multiple institutions, blinding advisory engines.  
-   *$\rightarrow$ Solved via **consent-gated Account Aggregator integration** providing a unified view of net worth, cash flow, liquidity ratios, and liabilities.*
+   *→ Solved via **consent-gated Account Aggregator integration** providing a unified view of net worth, cash flow, liquidity ratios, and liabilities.*
 3. **Sophisticated Behavioral Fraud Vectors:** Modern attacks are rarely just brute force; fraudsters use behavioral coercion (e.g. phone-coached fund transfers, nocturnal drain attempts, rapid velocity bursts).  
-   *$\rightarrow$ Solved via an **in-line 5-stage cyber-pipeline** combining behavioral telemetry, XGBoost classification, and PyTorch autoencoder novelty detection.*
+   *→ Solved via an **in-line 5-stage cyber-pipeline** combining behavioral telemetry, XGBoost classification, and PyTorch autoencoder novelty detection.*
 4. **The "Black Box" Explainability Gap:** Regulators and customers distrust opaque AI.  
-   *$\rightarrow$ Solved via **7 locally hosted explainability engines** translating decisions into transparent, plain-language justifications in English, Hindi, and Punjabi with anti-hallucination guardrails.*
+   *→ Solved via **7 locally hosted explainability engines** translating decisions into transparent, plain-language justifications in English, Hindi, and Punjabi with anti-hallucination guardrails.*
 
 ---
 
@@ -137,10 +137,10 @@ Every investment passes through an ordered chain of independent evaluators befor
 
 | Trigger | Challenge Plan |
 |---|---|
-| Unknown / Unregistered Device | Security Question $\rightarrow$ OTP |
-| Large Amount Deviation | MPIN $\rightarrow$ OTP |
+| Unknown / Unregistered Device | Security Question → OTP |
+| Large Amount Deviation | MPIN → OTP |
 | High Velocity / Distress Signal | OTP Re-confirmation |
-| Nocturnal / Unusual Timing | Acknowledge $\rightarrow$ MPIN |
+| Nocturnal / Unusual Timing | Acknowledge → MPIN |
 
 *Three failed attempts cancel the transaction. If the customer reports fraud ("This wasn't me"), the system records a `CUSTOMER_REPORTED_FRAUD` audit event and freezes the session.*
 
